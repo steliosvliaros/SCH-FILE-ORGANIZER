@@ -1,0 +1,340 @@
+top_level_folders:
+- '{NAMECODE}-{TYP3}-{VAT9}'
+naming_policy:
+  philosophy: One Asset, One Folder, One Location, Complete History
+  company_folder:
+    pattern: '{NAMECODE}-{TYP3}-{VAT9}'
+    fields:
+      NAMECODE: Short company code (from company register)
+      TYP3: '3-letter legal form: AEE/EPE/EEE/OEE/IKE/MIK'
+      VAT9: Full 9-digit VAT (leading zeros preserved)
+  asset_folder:
+    pattern: '{TYPEID}_{PROJECT_NAME}_{LOCATION}'
+    rules:
+    - Use hyphens '-' instead of spaces in PROJECT_NAME and LOCATION
+    - Avoid special characters; prefer ASCII letters, digits, '-' and '_'
+  typeid:
+    pattern: '{TYPE}{METRIC}-{SS}'
+    fields:
+      TYPE: 3-letter asset/project type code
+      METRIC: Encoded characteristic metric as XXpYYY (thousands separator)
+      SS: 2-digit sequence 01-99 for collisions
+    encoding:
+      types:
+        WND:
+          label: Wind farm
+          characteristic: Capacity
+          base_unit: MW
+          base_value_unit: kW
+          allowed_input_units:
+          - MW
+          - kW
+          base_value_rule: BASE_VALUE(kW)=round(MW*1000)
+          example: 2.000 MW -> 02p000
+        DTC:
+          label: Datacenter
+          characteristic: Contracted IT load
+          base_unit: MW
+          base_value_unit: kW
+          allowed_input_units:
+          - MW
+          - kW
+          base_value_rule: BASE_VALUE(kW)=round(MW*1000)
+          example: 3.200 MW -> 03p200
+        HTL:
+          label: Hotel
+          characteristic: Beds
+          base_unit: beds
+          base_value_unit: beds
+          allowed_input_units:
+          - beds
+          base_value_rule: BASE_VALUE=beds (integer)
+          example: 70 beds -> 00p070
+        HYP:
+          label: Hydroponics/Greenhouse
+          characteristic: Cultivation area
+          base_unit: m2
+          base_value_unit: m2
+          allowed_input_units:
+          - m2
+          - ha
+          base_value_rule: BASE_VALUE(m2)=round(ha*10000) or round(m2)
+          example: 7000 m2 -> 07p000
+        BCH:
+          label: Biochar plant
+          characteristic: Output capacity
+          base_unit: tpy
+          base_value_unit: tpy
+          allowed_input_units:
+          - tpy
+          base_value_rule: BASE_VALUE=tpy (integer)
+          example: 2500 tpy -> 02p500
+        BMS:
+          label: Biomass plant
+          characteristic: Output capacity
+          base_unit: tpy
+          base_value_unit: tpy
+          allowed_input_units:
+          - tpy
+          base_value_rule: BASE_VALUE=tpy (integer)
+          example: 12500 tpy -> 12p500
+        HYD:
+          label: Hydrogen
+          characteristic: Production
+          base_unit: kg/day
+          base_value_unit: kg/day
+          allowed_input_units:
+          - kg/day
+          base_value_rule: BASE_VALUE=kg/day (integer)
+          example: 3000 kg/day -> 03p000
+        BES:
+          label: BESS
+          characteristic: Energy capacity
+          base_unit: kWh
+          base_value_unit: kWh
+          allowed_input_units:
+          - MWh
+          - kWh
+          base_value_rule: BASE_VALUE(kWh)=round(MWh*1000) or round(kWh)
+          example: 12.5 MWh -> 12p500
+        OTH:
+          label: Other
+          characteristic: User-defined
+          base_unit: unit
+          base_value_unit: unit
+          allowed_input_units:
+          - unit
+          base_value_rule: BASE_VALUE=unit (integer)
+          example: 42 -> 00p042
+        PVS:
+          label: PV plant
+          characteristic: Capacity
+          base_unit: MW
+          base_value_unit: kW
+          allowed_input_units:
+          - MW
+          - kW
+          - kWp
+          base_value_rule: convert to MW, then BASE_VALUE(kW)=round(MW*1000)
+          metric_format: XXpYYY where XX=MW integer part, YYY=kW remainder
+          example: 15.473 MW -> 15p473
+  filenames:
+    internal:
+      template: '{TYPEID}_{PHASE}_{DOCTYPE}_{DESCRIPTION}_{DATE}_{VERSION}_{STATUS}.{EXT}'
+      rules:
+      - DESCRIPTION must use hyphens '-' (no spaces)
+      - 'DATE format: YYYYMMDD'
+      - 'VERSION format: v01, v02, ...'
+      - STATUS must be controlled vocabulary
+    portable_export:
+      template: '{COMPANY_FOLDER}_{INTERNAL_FILENAME}'
+      rule: Use portable filenames only for exports/emails/portals; do not rename originals.
+  constraints:
+    max_full_path_chars: 240
+    max_filename_chars: 120
+    max_foldername_chars: 64
+    max_depth_segments: 12
+controlled_vocabularies:
+  status_tags:
+  - DRAFT
+  - REVIEW
+  - REVISED
+  - FINAL
+  - APPROVED
+  - SIGNED
+  - SENT
+  - RECEIVED
+  - SUPERSEDED
+  - CANCELLED
+  phase_codes:
+    FS: Feasibility
+    LA: Land Acquisition
+    PM: Permitting
+    DE: Design & Engineering
+    FN: Financing
+    PR: Procurement
+    CN: Construction
+    CM: Commissioning & COD
+    OP: Operations
+    DC: Decommissioning
+folder_structure:
+  roots:
+    COMPANY_ROOT:
+      description: Company root folder named per company_folder.pattern. Contains CORPORATE, TEMPLATES, ARCHIVE, ASSETS.
+      path_template: '{COMPANY_FOLDER}'
+      subfolders:
+      - CORPORATE
+      - TEMPLATES
+      - ARCHIVE
+      - ASSETS
+    ASSETS:
+      description: All active assets for this company; assets do not move.
+      path_template: '{COMPANY_FOLDER}/ASSETS/{ASSET_FOLDER}'
+    ARCHIVE:
+      description: Closed/sold/cancelled assets for this company, by year.
+      path_template: '{COMPANY_FOLDER}/ARCHIVE/{YEAR}/{ASSET_FOLDER}'
+    CORPORATE:
+      description: Corporate registers/policies for this company.
+      path_template: '{COMPANY_FOLDER}/CORPORATE'
+    TEMPLATES:
+      description: Templates + shared reference library for this company (single source of truth).
+      path_template: '{COMPANY_FOLDER}/TEMPLATES'
+  asset_standard_subfolders:
+    status_files:
+    - _STATUS_01_PIPELINE.txt
+    - _STATUS_02_UNDER_DEVELOPMENT.txt
+    - _STATUS_03_UNDER_CONSTRUCTION.txt
+    - _STATUS_04_OPERATIONAL.txt
+    lifecycle_folders:
+    - 00_ASSET_MASTER
+    - 02_FEASIBILITY
+    - 03_LAND_ACQUISITION
+    - 04_PERMITTING
+    - 05_DESIGN_ENGINEERING
+    - 06_FINANCING
+    - 07_PROCUREMENT
+    - 08_CONSTRUCTION
+    - 10_OPERATIONS
+    - 11_CONTRACTS_LEGAL
+    - 12_FINANCIAL
+    - 13_CORRESPONDENCE
+    - 14_DECOMMISSIONING
+    - 99_EXPORTS
+document_types:
+  CNT:
+    label: Contract
+    default_folder: 11_CONTRACTS_LEGAL
+    filename_template: '{TYPEID}_{PHASE}_CNT_{DESCRIPTION}_{DATE}_{VERSION}_{STATUS}.{EXT}'
+  PER:
+    label: Permit/License
+    default_folder: 04_PERMITTING
+    filename_template: '{TYPEID}_{PHASE}_PER_{DESCRIPTION}_{DATE}_{VERSION}_{STATUS}.{EXT}'
+  FIN:
+    label: Financial
+    default_folder: 12_FINANCIAL
+    filename_template: '{TYPEID}_{PHASE}_FIN_{DESCRIPTION}_{DATE}_{VERSION}_{STATUS}.{EXT}'
+  DRWTEC:
+    label: Drawing (Technical)
+    default_folder: 05_DESIGN_ENGINEERING/Drawings
+    filename_template: '{TYPEID}_{PHASE}_DRWTEC_{DESCRIPTION}_{DATE}_{VERSION}_{STATUS}.{EXT}'
+  SDYTEC:
+    label: Study (Technical)
+    default_folder: 05_DESIGN_ENGINEERING/Studies
+    filename_template: '{TYPEID}_{PHASE}_SDYTEC_{DESCRIPTION}_{DATE}_{VERSION}_{STATUS}.{EXT}'
+  REP:
+    label: Report
+    default_folder: '{PHASE_FOLDER}/Reports'
+    filename_template: '{TYPEID}_{PHASE}_REP_{DESCRIPTION}_{DATE}_{VERSION}_{STATUS}.{EXT}'
+  COR:
+    label: Correspondence
+    default_folder: 13_CORRESPONDENCE
+    filename_template: '{TYPEID}_{PHASE}_COR_{DESCRIPTION}_{DATE}_{VERSION}_{STATUS}.{EXT}'
+  LEG:
+    label: Legal
+    default_folder: 11_CONTRACTS_LEGAL
+    filename_template: '{TYPEID}_{PHASE}_LEG_{DESCRIPTION}_{DATE}_{VERSION}_{STATUS}.{EXT}'
+  PRO:
+    label: Procurement
+    default_folder: 07_PROCUREMENT
+    filename_template: '{TYPEID}_{PHASE}_PRO_{DESCRIPTION}_{DATE}_{VERSION}_{STATUS}.{EXT}'
+  HSE:
+    label: HSE
+    default_folder: 08_CONSTRUCTION/HSE
+    filename_template: '{TYPEID}_{PHASE}_HSE_{DESCRIPTION}_{DATE}_{VERSION}_{STATUS}.{EXT}'
+  COM:
+    label: Commissioning
+    default_folder: 08_CONSTRUCTION
+    filename_template: '{TYPEID}_{PHASE}_COM_{DESCRIPTION}_{DATE}_{VERSION}_{STATUS}.{EXT}'
+  MNT:
+    label: Maintenance
+    default_folder: 10_OPERATIONS
+    filename_template: '{TYPEID}_{PHASE}_MNT_{DESCRIPTION}_{DATE}_{VERSION}_{STATUS}.{EXT}'
+  MAN:
+    label: Manual
+    default_folder: 00_ASSET_MASTER/Manuals
+    filename_template: '{TYPEID}_{PHASE}_MAN_{DESCRIPTION}_{DATE}_{VERSION}_{STATUS}.{EXT}'
+folder_buckets:
+  PHASE_FOLDER_MAP:
+    FS: 02_FEASIBILITY
+    LA: 03_LAND_ACQUISITION
+    PM: 04_PERMITTING
+    DE: 05_DESIGN_ENGINEERING
+    FN: 06_FINANCING
+    PR: 07_PROCUREMENT
+    CN: 08_CONSTRUCTION
+    CM: 08_CONSTRUCTION
+    OP: 10_OPERATIONS
+    DC: 14_DECOMMISSIONING
+archive_rules:
+- if_not_opened_for_years: 5
+- if_duplicate_exact_hash: review
+- if_extension_in:
+  - .tmp
+  - .bak
+  - .old
+  - .orig
+  - .swp
+  - .swo
+  - .crdownload
+  - .part
+  - .lock
+  - .dwl
+  - .dwl2
+  - .asd
+  - .wbk
+  - .~
+  then: archive_or_delete
+- if_filename_in:
+  - Thumbs.db
+  - .DS_Store
+  - desktop.ini
+  then: archive_or_delete
+- if_status_is: SUPERSEDED
+  then: keep_in_place_or_move_to__SUPERSEDED_folder
+required_fields:
+- company_folder
+- asset_folder
+- type
+- metric
+- ss
+- date
+- phase
+- doc_type
+- description
+- version
+- status
+- owner_or_project
+path_length_limits:
+  platform: Windows (NTFS/SMB)
+  reason: Avoid legacy MAX_PATH issues, zip extraction failures, and tool limitations on network shares.
+  recommended_limits:
+    max_full_path_chars: 240
+    max_filename_chars: 120
+    max_foldername_chars: 64
+    max_description_chars: 60
+    max_project_name_chars: 40
+    max_location_chars: 30
+    max_depth_segments: 12
+  enforcement_order_when_too_long:
+  - shorten DESCRIPTION (keep key tokens; remove stopwords)
+  - shorten PROJECT_NAME
+  - shorten LOCATION
+  - use abbreviations table (standard abbreviations for frequent terms)
+  - append short suffix for uniqueness (e.g., -h{HASH6})
+  - 'as last resort: move bulky working material to a Working/_LONGPATH subfolder inside the same phase folder'
+  normalization_rules:
+  - Replace spaces with '-'
+  - Remove repeated dashes
+  - 'Disallow characters: < > : " / \ | ? *'
+  - Avoid non-ASCII punctuation (use '-')
+  - Trim trailing dots and spaces
+  uniqueness_rule: If truncation creates a collision, append '-h{HASH6}' before the extension (HASH6 = first 6 hex chars of
+    content hash or deterministic name hash).
+  notes:
+  - Windows supports longer paths when 'LongPathsEnabled' is enabled, but this policy stays conservative for mixed environments.
+  - Keep paths short especially for DWG/CAD exports and email pack staging.
+company_root_subfolders:
+- CORPORATE
+- TEMPLATES
+- ARCHIVE
+- ASSETS

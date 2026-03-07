@@ -1,152 +1,122 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
-from hashlib import blake2b
+import hashlib
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Iterable
 
 import pandas as pd
 
 
-@dataclass(slots=True)
-class InventoryRecord:
-    absolute_path: str
-    root_path: str
-    relative_path: str
-    parent_path: str
-    name: str
-    stem: str
-    extension: str
-    size_bytes: int
-    modified_utc: str
-    created_utc: str
-    depth: int
-    content_hash: str | None
-    is_hidden: bool
-    is_symlink: bool
-
-    def to_dict(self) -> dict:
-        return asdict(self)
+@dataclass(frozen=True)
+class InventoryConfig:
+    hash_algorithm: str = "blake2b"
+    hash_size_bytes: int = 16
+    chunk_size: int = 1024 * 1024
+    follow_symlinks: bool = False
 
 
-DEFAULT_IGNORE_DIRS = {".git", "__pycache__", ".ipynb_checkpoints"}
-DEFAULT_IGNORE_FILES = {"Thumbs.db", ".DS_Store", "desktop.ini"}
+def hash_file(path: Path, algorithm: str = "blake2b", hash_size_bytes: int = 16, chunk_size: int = 1024 * 1024) -> str:
+    if algorithm == "blake2b":
+        h = hashlib.blake2b(digest_size=hash_size_bytes)
+    elif algorithm == "sha256":
+        h = hashlib.sha256()
+    else:
+        raise ValueError(f"Unsupported hash algorithm: {algorithm}")
+
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
 
 
-class InventoryError(Exception):
-    """Raised when the inventory scanner cannot proceed."""
-
-
-class InventoryScanner:
-    def __init__(
-        self,
-        root_path: str | Path,
-        *,
-        include_hidden: bool = False,
-        hash_files: bool = True,
-        hash_algorithm: str = "blake2b",
-        hash_chunk_size: int = 1024 * 1024,
-        follow_symlinks: bool = False,
-    ) -> None:
-        self.root_path = Path(root_path).expanduser().resolve()
-        self.include_hidden = include_hidden
-        self.hash_files = hash_files
-        self.hash_algorithm = hash_algorithm
-        self.hash_chunk_size = hash_chunk_size
-        self.follow_symlinks = follow_symlinks
-
-        if not self.root_path.exists():
-            raise FileNotFoundError(f"Scan root not found: {self.root_path}")
-        if not self.root_path.is_dir():
-            raise InventoryError(f"Scan root must be a directory: {self.root_path}")
-
-    def scan(self) -> list[InventoryRecord]:
-        return list(self.iter_records())
-
-    def iter_records(self) -> Iterator[InventoryRecord]:
-        for path in self._iter_files(self.root_path):
-            stat = path.stat(follow_symlinks=self.follow_symlinks)
-            relative_path = path.relative_to(self.root_path)
-            parent_relative = relative_path.parent.as_posix() if relative_path.parent != Path(".") else ""
-            yield InventoryRecord(
-                absolute_path=str(path),
-                root_path=str(self.root_path),
-                relative_path=relative_path.as_posix(),
-                parent_path=parent_relative,
-                name=path.name,
-                stem=path.stem,
-                extension=path.suffix.lower(),
-                size_bytes=stat.st_size,
-                modified_utc=_iso_utc(stat.st_mtime),
-                created_utc=_iso_utc(stat.st_ctime),
-                depth=len(relative_path.parts),
-                content_hash=self._hash_file(path) if self.hash_files else None,
-                is_hidden=_is_hidden(path),
-                is_symlink=path.is_symlink(),
-            )
-
-    def to_dataframe(self) -> pd.DataFrame:
-        rows = [record.to_dict() for record in self.scan()]
-        return pd.DataFrame(rows)
-
-    def write_outputs(
-        self,
-        *,
-        csv_path: str | Path | None = None,
-        parquet_path: str | Path | None = None,
-    ) -> pd.DataFrame:
-        frame = self.to_dataframe()
-        if csv_path:
-            csv_path = Path(csv_path)
-            csv_path.parent.mkdir(parents=True, exist_ok=True)
-            frame.to_csv(csv_path, index=False)
-        if parquet_path:
-            parquet_path = Path(parquet_path)
-            parquet_path.parent.mkdir(parents=True, exist_ok=True)
-            frame.to_parquet(parquet_path, index=False)
-        return frame
-
-    def _iter_files(self, root: Path) -> Iterable[Path]:
-        for path in root.rglob("*"):
-            if path.is_dir():
-                continue
-            if not self.follow_symlinks and path.is_symlink():
-                continue
-            if self._should_skip(path):
+def iter_files(scan_root: Path, follow_symlinks: bool = False) -> Iterable[Path]:
+    for path in scan_root.rglob("*"):
+        if path.is_file():
+            if path.is_symlink() and not follow_symlinks:
                 continue
             yield path
 
-    def _should_skip(self, path: Path) -> bool:
-        parts = set(path.parts)
-        if parts.intersection(DEFAULT_IGNORE_DIRS):
-            return True
-        if path.name in DEFAULT_IGNORE_FILES and not self.include_hidden:
-            return False
-        return (not self.include_hidden) and _is_hidden(path)
 
-    def _hash_file(self, path: Path) -> str | None:
-        if self.hash_algorithm != "blake2b":
-            raise InventoryError(f"Unsupported hash algorithm: {self.hash_algorithm}")
+def build_inventory(scan_root: str | Path, config: InventoryConfig | None = None) -> pd.DataFrame:
+    config = config or InventoryConfig()
+    root = Path(scan_root).resolve()
+    if not root.exists():
+        raise FileNotFoundError(root)
+    if not root.is_dir():
+        raise NotADirectoryError(root)
 
-        hasher = blake2b(digest_size=16)
-        try:
-            with path.open("rb") as handle:
-                while True:
-                    chunk = handle.read(self.hash_chunk_size)
-                    if not chunk:
-                        break
-                    hasher.update(chunk)
-            return hasher.hexdigest()
-        except (OSError, PermissionError):
-            return None
+    rows: list[dict] = []
+    for path in iter_files(root, follow_symlinks=config.follow_symlinks):
+        stat = path.stat()
+        rel = path.relative_to(root)
+        parts = rel.parts
+        rows.append(
+            {
+                "scan_root": str(root),
+                "absolute_path": str(path),
+                "relative_path": str(rel),
+                "parent_relative": str(rel.parent) if rel.parent != Path(".") else "",
+                "filename": path.name,
+                "stem": path.stem,
+                "suffix": path.suffix.lower(),
+                "size_bytes": stat.st_size,
+                "modified_at": pd.Timestamp(stat.st_mtime, unit="s"),
+                "created_at": pd.Timestamp(stat.st_ctime, unit="s"),
+                "depth_segments": len(parts),
+                "path_length": len(str(path)),
+                "filename_length": len(path.name),
+                "is_hidden": path.name.startswith("."),
+                "is_symlink": path.is_symlink(),
+                "top_segment": parts[0] if parts else "",
+                "hash": hash_file(
+                    path,
+                    algorithm=config.hash_algorithm,
+                    hash_size_bytes=config.hash_size_bytes,
+                    chunk_size=config.chunk_size,
+                ),
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+
+    df = df.sort_values(["relative_path"]).reset_index(drop=True)
+    duplicate_counts = df.groupby("hash")["hash"].transform("size")
+    df["duplicate_group_size"] = duplicate_counts
+    df["is_duplicate_hash"] = duplicate_counts > 1
+    return df
 
 
+def save_inventory(df: pd.DataFrame, output_base: str | Path) -> tuple[Path, Path]:
+    output_base = Path(output_base)
+    output_base.parent.mkdir(parents=True, exist_ok=True)
+    csv_path = output_base.with_suffix(".csv")
+    parquet_path = output_base.with_suffix(".parquet")
+    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    df.to_parquet(parquet_path, index=False)
+    return csv_path, parquet_path
 
-def _iso_utc(timestamp: float) -> str:
-    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
 
+def summarize_inventory(df: pd.DataFrame) -> dict[str, object]:
+    if df.empty:
+        return {
+            "file_count": 0,
+            "total_size_bytes": 0,
+            "duplicate_files": 0,
+            "duplicate_groups": 0,
+            "max_path_length": 0,
+        }
 
-
-def _is_hidden(path: Path) -> bool:
-    return any(part.startswith(".") for part in path.parts)
+    return {
+        "file_count": int(len(df)),
+        "total_size_bytes": int(df["size_bytes"].sum()),
+        "duplicate_files": int(df["is_duplicate_hash"].sum()),
+        "duplicate_groups": int((df.groupby("hash").size() > 1).sum()),
+        "max_path_length": int(df["path_length"].max()),
+        "max_depth_segments": int(df["depth_segments"].max()),
+    }

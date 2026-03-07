@@ -1,19 +1,21 @@
 name: schfs
 channels:
   - conda-forge
+  - defaults
 dependencies:
   - python=3.11
   - pandas
   - pyarrow
   - pyyaml
-  - matplotlib
-  - jupyterlab
+  - jupyter
   - notebook
   - ipykernel
+  - matplotlib
+  - openpyxl
   - pip
   - pip:
-      - python-docx
       - pypdf
+      - python-docx
       - rapidfuzz
       - chardet
       - tqdm

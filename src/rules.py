@@ -1,199 +1,212 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
 import pandas as pd
 
-from .inventory import InventoryRecord
-from .policy_loader import PolicyConfig
+from .policy_loader import PolicyLoader
 
 
-@dataclass(slots=True)
-class RuleDecision:
-    absolute_path: str
-    relative_path: str
-    current_name: str
-    policy_status: str
-    action: str
-    reason: str
-    matched_phase: str | None
-    matched_doc_type: str | None
-    matched_status: str | None
-    proposed_lifecycle_folder: str | None
-    proposed_special_folder: str | None
-    confidence: float
-    content_hash: str | None
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+@dataclass(frozen=True)
+class RuleConfig:
+    path_warning_chars: int = 220
+    filename_warning_chars: int = 110
 
 
-class RuleEngine:
-    """Deterministic first-pass rules driven by the YAML policy."""
+def _extract_archive_conditions(policy: dict[str, Any]) -> tuple[set[str], set[str]]:
+    junk_exts: set[str] = set()
+    junk_names: set[str] = set()
+    for rule in policy.get("archive_rules", []):
+        if "if_extension_in" in rule:
+            junk_exts.update(str(x).lower() for x in rule["if_extension_in"])
+        if "if_filename_in" in rule:
+            junk_names.update(str(x) for x in rule["if_filename_in"])
+    return junk_exts, junk_names
 
-    def __init__(self, policy: PolicyConfig) -> None:
-        self.policy = policy
-        self.filename_regex = policy.filename_pattern()
-        self.junk_extensions = self._load_junk_extensions()
-        self.junk_filenames = self._load_junk_filenames()
-        self.special_folder_names = set(policy.raw["special_storage_policy"]["special_folders"].keys())
 
-    def classify_record(self, record: InventoryRecord, *, duplicate_hashes: set[str] | None = None) -> RuleDecision:
-        duplicate_hashes = duplicate_hashes or set()
-        ext = record.extension.lower()
-        filename = record.name
-        parent_parts = PurePosixPath(record.parent_path).parts if record.parent_path else ()
+def _canonical_duplicate_flags(df: pd.DataFrame) -> pd.Series:
+    if df.empty:
+        return pd.Series(dtype=bool)
+    if "hash" not in df.columns:
+        return pd.Series(False, index=df.index)
+    ordered = df.sort_values(["hash", "modified_at", "relative_path"], ascending=[True, False, True])
+    keep_idx = ordered.groupby("hash", dropna=False).head(1).index
+    flags = pd.Series(False, index=df.index)
+    dup_mask = df["is_duplicate_hash"].fillna(False) if "is_duplicate_hash" in df.columns else False
+    flags.loc[dup_mask] = True
+    flags.loc[keep_idx] = False
+    return flags
 
-        if filename in self.junk_filenames or ext in self.junk_extensions:
-            return RuleDecision(
-                absolute_path=record.absolute_path,
-                relative_path=record.relative_path,
-                current_name=filename,
-                policy_status="junk",
-                action="archive_or_delete",
-                reason="Matched archive_rules junk filename/extension rule.",
-                matched_phase=None,
-                matched_doc_type=None,
-                matched_status=None,
-                proposed_lifecycle_folder=None,
-                proposed_special_folder=None,
-                confidence=1.0,
-                content_hash=record.content_hash,
-            )
 
-        if record.content_hash and record.content_hash in duplicate_hashes:
-            return RuleDecision(
-                absolute_path=record.absolute_path,
-                relative_path=record.relative_path,
-                current_name=filename,
-                policy_status="duplicate",
-                action="move_to_special_folder",
-                reason="Exact duplicate hash found.",
-                matched_phase=None,
-                matched_doc_type=None,
-                matched_status=None,
-                proposed_lifecycle_folder=None,
-                proposed_special_folder="_DUPLICATED",
-                confidence=1.0,
-                content_hash=record.content_hash,
-            )
+def _ensure_required_columns(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
 
-        filename_match = self.filename_regex.match(filename)
-        if filename_match:
-            groups = filename_match.groupdict()
-            phase = groups["phase"]
-            doc_type = groups["doc_type"]
-            status = groups["status"]
-            lifecycle_folder = self.policy.get_doc_type_default_folder(doc_type, phase=phase)
+    if "relative_path" not in out.columns and "absolute_path" in out.columns:
+        out["relative_path"] = out["absolute_path"].astype(str)
 
-            if status == "SUPERSEDED":
-                return RuleDecision(
-                    absolute_path=record.absolute_path,
-                    relative_path=record.relative_path,
-                    current_name=filename,
-                    policy_status="superseded",
-                    action="move_to_special_folder",
-                    reason="Filename already marked as SUPERSEDED.",
-                    matched_phase=phase,
-                    matched_doc_type=doc_type,
-                    matched_status=status,
-                    proposed_lifecycle_folder=lifecycle_folder,
-                    proposed_special_folder="_SUPERSEDED",
-                    confidence=1.0,
-                    content_hash=record.content_hash,
-                )
-
-            in_special_folder = any(part in self.special_folder_names for part in parent_parts)
-            if in_special_folder:
-                status_label = "special_storage"
-                action = "keep_in_place"
-                reason = "File already lives under a policy-defined special folder."
-            else:
-                status_label = "policy_named"
-                action = "review_path"
-                reason = "Filename matches the policy template; validate folder placement next."
-
-            return RuleDecision(
-                absolute_path=record.absolute_path,
-                relative_path=record.relative_path,
-                current_name=filename,
-                policy_status=status_label,
-                action=action,
-                reason=reason,
-                matched_phase=phase,
-                matched_doc_type=doc_type,
-                matched_status=status,
-                proposed_lifecycle_folder=lifecycle_folder,
-                proposed_special_folder=None,
-                confidence=0.95,
-                content_hash=record.content_hash,
-            )
-
-        inferred_doc_type = self._infer_doc_type_from_parent(parent_parts)
-        inferred_phase = self._infer_phase_from_parent(parent_parts)
-        lifecycle_folder = None
-        if inferred_doc_type:
-            lifecycle_folder = self.policy.get_doc_type_default_folder(inferred_doc_type, phase=inferred_phase or "FS")
-        elif inferred_phase:
-            lifecycle_folder = self.policy.phase_folder_map.get(inferred_phase)
-
-        return RuleDecision(
-            absolute_path=record.absolute_path,
-            relative_path=record.relative_path,
-            current_name=filename,
-            policy_status="review",
-            action="manual_review",
-            reason="Filename does not fully match the policy template; infer fields from folder context or content later.",
-            matched_phase=inferred_phase,
-            matched_doc_type=inferred_doc_type,
-            matched_status=None,
-            proposed_lifecycle_folder=lifecycle_folder,
-            proposed_special_folder=None,
-            confidence=0.45 if inferred_doc_type or inferred_phase else 0.2,
-            content_hash=record.content_hash,
+    if "filename" not in out.columns:
+        out["filename"] = out["relative_path"].astype(str).map(lambda x: PurePosixPath(x.replace('\\', '/')).name)
+    else:
+        missing_filename = out["filename"].isna() | (out["filename"].astype(str).str.strip() == "")
+        out.loc[missing_filename, "filename"] = out.loc[missing_filename, "relative_path"].astype(str).map(
+            lambda x: PurePosixPath(x.replace('\\', '/')).name
         )
 
-    def classify_dataframe(self, inventory_df: pd.DataFrame) -> pd.DataFrame:
-        duplicate_hashes = self.find_duplicate_hashes(inventory_df)
-        decisions: list[dict[str, Any]] = []
-        for row in inventory_df.to_dict(orient="records"):
-            record = InventoryRecord(**row)
-            decisions.append(self.classify_record(record, duplicate_hashes=duplicate_hashes).to_dict())
-        return pd.DataFrame(decisions)
+    if "suffix" not in out.columns:
+        out["suffix"] = out["filename"].astype(str).map(lambda x: PurePosixPath(x).suffix.lower())
+    else:
+        missing_suffix = out["suffix"].isna() | (out["suffix"].astype(str).str.strip() == "")
+        out.loc[missing_suffix, "suffix"] = out.loc[missing_suffix, "filename"].astype(str).map(
+            lambda x: PurePosixPath(x).suffix.lower()
+        )
 
-    @staticmethod
-    def find_duplicate_hashes(inventory_df: pd.DataFrame) -> set[str]:
-        if inventory_df.empty or "content_hash" not in inventory_df.columns:
-            return set()
-        hashed = inventory_df.dropna(subset=["content_hash"])
-        duplicate_mask = hashed.duplicated(subset=["content_hash"], keep=False)
-        return set(hashed.loc[duplicate_mask, "content_hash"].tolist())
+    if "stem" not in out.columns:
+        out["stem"] = out["filename"].astype(str).map(lambda x: PurePosixPath(x).stem)
 
-    def _load_junk_extensions(self) -> set[str]:
-        junk_extensions: set[str] = set()
-        for rule in self.policy.raw["archive_rules"]:
-            if "if_extension_in" in rule:
-                junk_extensions.update(ext.lower() for ext in rule["if_extension_in"])
-        return junk_extensions
+    if "parent_relative" not in out.columns:
+        out["parent_relative"] = out["relative_path"].astype(str).map(
+            lambda x: str(PurePosixPath(x.replace('\\', '/')).parent).replace('.', '')
+        )
+        out["parent_relative"] = out["parent_relative"].replace({"": "", ".": ""})
 
-    def _load_junk_filenames(self) -> set[str]:
-        junk_filenames: set[str] = set()
-        for rule in self.policy.raw["archive_rules"]:
-            if "if_filename_in" in rule:
-                junk_filenames.update(rule["if_filename_in"])
-        return junk_filenames
+    if "path_length" not in out.columns:
+        base_col = "absolute_path" if "absolute_path" in out.columns else "relative_path"
+        out["path_length"] = out[base_col].astype(str).str.len()
 
-    def _infer_doc_type_from_parent(self, parent_parts: tuple[str, ...]) -> str | None:
-        for doc_type, definition in self.policy.document_types.items():
-            default_folder = str(definition["default_folder"]).split("/")[0]
-            if default_folder in parent_parts:
-                return doc_type
+    if "filename_length" not in out.columns:
+        out["filename_length"] = out["filename"].astype(str).str.len()
+
+    if "modified_at" not in out.columns:
+        out["modified_at"] = pd.NaT
+    out["modified_at"] = pd.to_datetime(out["modified_at"], errors="coerce")
+
+    if "is_duplicate_hash" not in out.columns:
+        if "hash" in out.columns:
+            dup_sizes = out.groupby("hash")["hash"].transform("size")
+            out["is_duplicate_hash"] = dup_sizes > 1
+        else:
+            out["is_duplicate_hash"] = False
+
+    return out
+
+
+def classify_inventory(df: pd.DataFrame, policy_loader: PolicyLoader, config: RuleConfig | None = None) -> pd.DataFrame:
+    config = config or RuleConfig()
+    out = _ensure_required_columns(df)
+    if out.empty:
+        return out
+
+    filename_parser = policy_loader.compile_filename_regex()
+    junk_exts, junk_names = _extract_archive_conditions(policy_loader.policy)
+    default_status = "review"
+
+    out["suffix"] = out["suffix"].fillna("").astype(str).str.lower()
+    out["filename"] = out["filename"].fillna("").astype(str)
+    out["parent_relative"] = out["parent_relative"].fillna("").astype(str)
+
+    out["is_junk_extension"] = out["suffix"].isin(junk_exts)
+    out["is_junk_filename"] = out["filename"].isin(junk_names)
+    out["is_canonical_duplicate"] = _canonical_duplicate_flags(out)
+    out["path_risk"] = out["path_length"] >= config.path_warning_chars
+    out["filename_risk"] = out["filename_length"] >= config.filename_warning_chars
+
+    parsed = out["filename"].apply(lambda name: filename_parser.match(name).groupdict() if filename_parser.match(name) else None)
+    out["is_policy_compliant_name"] = parsed.notna()
+    out["parsed_typeid"] = parsed.apply(lambda x: x.get("typeid") if isinstance(x, dict) else None)
+    out["parsed_phase"] = parsed.apply(lambda x: x.get("phase") if isinstance(x, dict) else None)
+    out["parsed_doc_type"] = parsed.apply(lambda x: x.get("doc_type") if isinstance(x, dict) else None)
+    out["parsed_description"] = parsed.apply(lambda x: x.get("description") if isinstance(x, dict) else None)
+    out["parsed_date"] = parsed.apply(lambda x: x.get("date") if isinstance(x, dict) else None)
+    out["parsed_version"] = parsed.apply(lambda x: x.get("version") if isinstance(x, dict) else None)
+    out["parsed_status"] = parsed.apply(lambda x: x.get("status") if isinstance(x, dict) else None)
+    out["parsed_ext"] = parsed.apply(lambda x: x.get("ext") if isinstance(x, dict) else None)
+
+    def build_default_subpath(row: pd.Series) -> str | None:
+        phase = row.get("parsed_phase")
+        doc_type = row.get("parsed_doc_type")
+        if not phase or not doc_type:
+            return None
+        return policy_loader.default_folder_for(phase, doc_type)
+
+    out["default_folder_subpath"] = out.apply(build_default_subpath, axis=1)
+
+    def build_special_target(row: pd.Series) -> str | None:
+        if row.get("is_junk_extension") or row.get("is_junk_filename"):
+            return "_DEPRECATED"
+        if row.get("is_canonical_duplicate"):
+            return "_DUPLICATED"
+        if row.get("parsed_status") == "SUPERSEDED":
+            return "_SUPERSEDED"
         return None
 
-    def _infer_phase_from_parent(self, parent_parts: tuple[str, ...]) -> str | None:
-        for phase, folder in self.policy.phase_folder_map.items():
-            if folder in parent_parts:
-                return phase
+    out["special_folder_target"] = out.apply(build_special_target, axis=1)
+
+    def classify_row(row: pd.Series) -> tuple[str, str, float]:
+        reasons: list[str] = []
+        if row["is_junk_extension"]:
+            reasons.append("junk extension from archive_rules")
+        if row["is_junk_filename"]:
+            reasons.append("junk filename from archive_rules")
+        if row["is_canonical_duplicate"]:
+            reasons.append("duplicate hash non-canonical copy")
+        if row["parsed_status"] == "SUPERSEDED":
+            reasons.append("status is SUPERSEDED")
+        if row["path_risk"]:
+            reasons.append("path length warning")
+        if row["filename_risk"]:
+            reasons.append("filename length warning")
+
+        if row["is_junk_extension"] or row["is_junk_filename"]:
+            return "archive_or_delete_candidate", "; ".join(reasons), 0.99
+        if row["is_canonical_duplicate"]:
+            return "move_to_special_folder", "; ".join(reasons), 0.98
+        if row["parsed_status"] == "SUPERSEDED":
+            return "move_to_special_folder", "; ".join(reasons), 0.97
+        if row["is_policy_compliant_name"]:
+            return "compliant_keep_review_path", "; ".join(reasons) or "policy-compliant filename", 0.95
+        return default_status, "; ".join(reasons) or "needs classification or rename mapping", 0.50
+
+    classified = out.apply(classify_row, axis=1, result_type="expand")
+    out[["rule_status", "rule_reason", "rule_confidence"]] = classified
+
+    def build_relative_target(row: pd.Series) -> str | None:
+        filename = row["filename"]
+        if row["rule_status"] == "move_to_special_folder":
+            special = row["special_folder_target"] or "_REVIEW"
+            parent = row.get("parent_relative") or ""
+            lifecycle = row["default_folder_subpath"] if row.get("default_folder_subpath") else parent
+            base = PurePosixPath(special)
+            if lifecycle:
+                base = base / lifecycle
+            return str(base / filename)
+        if row["rule_status"] == "archive_or_delete_candidate":
+            return str(PurePosixPath("_DEPRECATED") / filename)
+        if row["rule_status"] == "compliant_keep_review_path" and row.get("default_folder_subpath"):
+            return str(PurePosixPath(row["default_folder_subpath"]) / filename)
         return None
+
+    out["proposed_relative_target"] = out.apply(build_relative_target, axis=1)
+
+    def action_priority(status: str) -> int:
+        order = {
+            "archive_or_delete_candidate": 1,
+            "move_to_special_folder": 2,
+            "compliant_keep_review_path": 3,
+            "review": 4,
+        }
+        return order.get(status, 99)
+
+    out["action_priority"] = out["rule_status"].map(action_priority)
+    out = out.sort_values(["action_priority", "relative_path"]).reset_index(drop=True)
+    return out
+
+
+def save_rule_outputs(df: pd.DataFrame, output_base: str | PurePosixPath) -> tuple[str, str]:
+    output_base = str(output_base)
+    csv_path = f"{output_base}.csv"
+    parquet_path = f"{output_base}.parquet"
+    df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    df.to_parquet(parquet_path, index=False)
+    return csv_path, parquet_path
