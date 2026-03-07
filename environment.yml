@@ -1,0 +1,20 @@
+name: schfs
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pandas
+  - pyarrow
+  - pyyaml
+  - matplotlib
+  - jupyterlab
+  - notebook
+  - ipykernel
+  - pip
+  - pip:
+      - python-docx
+      - pypdf
+      - rapidfuzz
+      - chardet
+      - tqdm
+      - rich

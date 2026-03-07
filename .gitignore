@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.env
+.venv/
+.vscode/
+data/raw_inventory/*
+data/working/*
+data/outputs/*
+data/logs/*
+data/state/*
+!data/raw_inventory/.gitkeep
+!data/working/.gitkeep
+!data/outputs/.gitkeep
+!data/logs/.gitkeep
+!data/state/.gitkeep
