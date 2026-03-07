@@ -37,3 +37,8 @@ Use `policy/SCH_fileserver_policy_v2_4.yaml` as the current source of truth unle
 ## 17 OCR feedback to execution
 
 Use `notebooks/17_ocr_feedback_to_execution.ipynb` to promote rows from `ocr_canonical_feedback_rerun_*` back into planner-style outputs and optionally rebuild execution manifests. This keeps OCR-rescued files on the same controlled path as the normal feedback loop.
+
+
+## 18 Master orchestration
+
+Use `notebooks/18_master_orchestration.ipynb` to inspect which outputs already exist, build a recommended run plan for the selected branch (core / quality / OCR / ops), export `pipeline_status_latest.csv` and `pipeline_plan_latest.csv`, and identify the next notebook to run without making any file changes.
