@@ -1,6 +1,6 @@
 # SCH File Organizer
 
-Rules-first local file reorganization toolkit for applying the `SCH_fileserver_policy_v2_3.yaml` standard.
+Rules-first local file reorganization toolkit for applying the `SCH_fileserver_policy_v2_4.yaml` standard.
 
 ## Current scope
 
@@ -8,13 +8,15 @@ Rules-first local file reorganization toolkit for applying the `SCH_fileserver_p
 - Inventory folders recursively with hashes and path-risk indicators
 - Apply deterministic first-pass rules to inventory outputs
 - Produce dry-run classification tables for manual review in Jupyter / VS Code
+- Extract text from common document types for downstream review and classification
 
 ## Recommended workflow
 
 1. Run `notebooks/01_policy_check.ipynb`
 2. Run `notebooks/02_inventory.ipynb` on a copied sandbox folder
 3. Run `notebooks/03_rule_classification.ipynb`
-4. Review CSV / Parquet outputs before any move or rename logic is added
+4. Run `notebooks/04_extract_text.ipynb` to enrich inventory rows with extracted text
+5. Review CSV / Parquet outputs before any move or rename logic is added
 
 ## Layout
 
