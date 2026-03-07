@@ -51,3 +51,8 @@ Use `policy/SCH_fileserver_policy_v2_4.yaml` as the current source of truth unle
 ## 19 Batch presets
 
 Use `notebooks/19_batch_presets.ipynb` to choose a practical preset mode such as `review_only`, `canonicalize_unresolved`, `ocr_rescue`, `promote_to_execution`, `apply_small_live_batch`, or `rollback_last_batch`. It exports preset-specific summary, status, and plan tables and tells you the next notebook to run for that mode.
+
+
+## 20 Batch runner
+
+Use `notebooks/20_batch_runner.ipynb` to turn a preset into a concrete run sequence with safety stop points. It exports a batch-run summary, a step-by-step sequence table, and a PowerShell script template (`batch_runner_run_latest.ps1`) you can use locally if you want a guided command-line run with pauses at checkpoints.
