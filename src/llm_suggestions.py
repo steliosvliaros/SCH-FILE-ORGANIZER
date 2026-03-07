@@ -5,7 +5,7 @@ from pathlib import Path
 import json
 import math
 import re
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 import yaml
@@ -49,8 +49,9 @@ class SuggestionConfig:
     timeout_seconds: int = 120
     max_rows: int = 50
     require_unresolved_only: bool = True
-    include_text_preview_chars: int = 3000
+    include_text_preview_chars: int = 8000
     temperature: float = 0.0
+    prefer_content_for_description: bool = True
 
 
 SUGGESTION_COLUMNS = [
@@ -63,6 +64,7 @@ SUGGESTION_COLUMNS = [
     'suggested_version',
     'suggested_status',
     'suggested_description',
+    'suggested_description_source',
     'suggested_company_folder',
     'suggested_asset_folder',
     'suggested_owner_or_project',
@@ -222,29 +224,97 @@ def _suggest_doc_type(text: str, policy: Mapping[str, Any]) -> str:
     return ''
 
 
-def _suggest_description(text: str, filename: str, unresolved_fields: Sequence[str]) -> str:
-    candidates: List[str] = []
+TITLE_STOPWORDS = {
+    'page', 'confidential', 'draft', 'final', 'version', 'revision', 'rev', 'date', 'issued',
+    'approved', 'received', 'company', 'document', 'file', 'scan', 'untitled', 'newdocument'
+}
+
+
+def _normalize_description_candidate(value: str) -> str:
+    value = _safe_str(value)
+    value = value.replace('_', '-')
+    value = re.sub(r'\s+', '-', value)
+    value = re.sub(r'[^A-Za-z0-9-]+', '-', value)
+    value = re.sub(r'-{2,}', '-', value).strip('-')
+    return value[:80]
+
+
+def _is_title_like_line(line: str) -> bool:
+    line = _safe_str(line)
+    if not line:
+        return False
+    if len(line) < 8 or len(line) > 120:
+        return False
+    lowered = line.lower()
+    if lowered in TITLE_STOPWORDS:
+        return False
+    if re.fullmatch(r'[\d\W_]+', line):
+        return False
+    digits = sum(ch.isdigit() for ch in line)
+    letters = sum(ch.isalpha() for ch in line)
+    if letters == 0 or digits > letters:
+        return False
+    words = [w for w in re.split(r'\s+', line) if w]
+    if len(words) > 14:
+        return False
+    return True
+
+
+def _extract_title_candidates_from_text(text: str) -> List[Tuple[str, str]]:
+    text = _safe_str(text)
+    lines = [re.sub(r'\s+', ' ', ln).strip(' -_:.\t') for ln in text.splitlines()]
+    lines = [ln for ln in lines if ln]
+    out: List[Tuple[str, str]] = []
+
+    keyword_patterns = [
+        re.compile(r'^(?:subject|title|project|description)\s*[:\-]\s*(.+)$', re.IGNORECASE),
+    ]
+
+    for ln in lines[:40]:
+        for pat in keyword_patterns:
+            m = pat.match(ln)
+            if m:
+                cand = _normalize_description_candidate(m.group(1))
+                if cand:
+                    out.append((cand, f'content_field:{ln[:80]}'))
+
+    for idx, ln in enumerate(lines[:25]):
+        if _is_title_like_line(ln):
+            cand = _normalize_description_candidate(ln)
+            if cand and cand.lower() not in TITLE_STOPWORDS:
+                out.append((cand, f'content_line_{idx+1}:{ln[:80]}'))
+
+    return out
+
+
+def _suggest_description(text: str, filename: str, unresolved_fields: Sequence[str], prefer_content: bool = True) -> Tuple[str, str]:
+    candidates: List[Tuple[str, str]] = []
+
+    if prefer_content:
+        candidates.extend(_extract_title_candidates_from_text(text))
+
     stem = Path(filename).stem
     stem = re.sub(r'^[A-Z]{2,3}\d{2}p\d{3}-\d{2}_[A-Z]{2}_[A-Z]{3,6}_', '', stem)
     stem = re.sub(r'_20\d{6}_v\d{2}_[A-Z_]+$', '', stem)
-    stem = stem.replace('_', '-').strip('-_ .')
+    stem = _normalize_description_candidate(stem)
     if stem and stem.lower() not in {'document1', 'newdocument', 'scan', 'untitled'}:
-        candidates.append(stem)
+        candidates.append((stem, 'filename_stem'))
 
     preview = _safe_str(text)[:400]
     preview = re.sub(r'\s+', ' ', preview)
     preview = re.sub(r'[^A-Za-z0-9 -]+', ' ', preview)
     words = [w for w in preview.split(' ') if w]
     if words:
-        phrase = '-'.join(words[:8]).strip('-')
+        phrase = _normalize_description_candidate(' '.join(words[:8]))
         if len(phrase) >= 8:
-            candidates.append(phrase)
+            candidates.append((phrase, 'content_preview'))
 
-    for cand in candidates:
-        cand = re.sub(r'-{2,}', '-', cand).strip('-')
-        if cand:
-            return cand[:80]
-    return ''
+    seen = set()
+    for cand, source in candidates:
+        if cand and cand not in seen:
+            seen.add(cand)
+            return cand, source
+    return '', ''
 
 
 def _suggest_company_fields(text: str, path_text: str) -> Dict[str, str]:
@@ -269,12 +339,19 @@ def _suggest_company_fields(text: str, path_text: str) -> Dict[str, str]:
     return out
 
 
-def _heuristic_suggestion(row: Mapping[str, Any], policy: Mapping[str, Any]) -> Dict[str, Any]:
+def _heuristic_suggestion(row: Mapping[str, Any], policy: Mapping[str, Any], config: Optional[SuggestionConfig] = None) -> Dict[str, Any]:
+    config = config or SuggestionConfig()
     filename = _safe_str(row.get('filename'))
     rel = _safe_str(row.get('relative_path'))
     unresolved = [u for u in _safe_str(row.get('unresolved_fields')).split(';') if u]
     text = _safe_str(row.get('extracted_text') or row.get('text_preview'))
     merged = ' '.join([filename, rel, text[:4000]])
+    suggested_description, suggested_description_source = _suggest_description(
+        text=text,
+        filename=filename,
+        unresolved_fields=unresolved,
+        prefer_content=config.prefer_content_for_description,
+    )
 
     suggested = {
         'relative_path': rel,
@@ -285,7 +362,8 @@ def _heuristic_suggestion(row: Mapping[str, Any], policy: Mapping[str, Any]) -> 
         'suggested_date': _safe_str(row.get('canonical_date')) or _extract_date(merged),
         'suggested_version': _safe_str(row.get('canonical_version')) or _extract_version(merged) or 'v01',
         'suggested_status': _safe_str(row.get('canonical_status')) or _extract_status(merged, policy) or 'DRAFT',
-        'suggested_description': _safe_str(row.get('canonical_description')) or _suggest_description(merged, filename, unresolved),
+        'suggested_description': _safe_str(row.get('canonical_description')) or suggested_description,
+        'suggested_description_source': suggested_description_source,
         'suggested_company_folder': '',
         'suggested_asset_folder': '',
         'suggested_owner_or_project': '',
@@ -316,7 +394,10 @@ def _heuristic_suggestion(row: Mapping[str, Any], policy: Mapping[str, Any]) -> 
     if text:
         confidence += 0.05
     suggested['suggestion_confidence'] = round(min(confidence, 0.95), 2)
-    suggested['suggestion_reason'] = 'heuristic extraction from filename/path/text preview'
+    if suggested.get('suggested_description_source', '').startswith('content'):
+        suggested['suggestion_reason'] = 'heuristic extraction from file content with filename/path fallback'
+    else:
+        suggested['suggestion_reason'] = 'heuristic extraction from filename/path/text preview'
     suggested['suggestion_evidence'] = '; '.join(evidence)
     return suggested
 
@@ -329,6 +410,7 @@ Return ONLY valid JSON with these keys:
 - suggested_version
 - suggested_status
 - suggested_description
+- suggested_description_source
 - suggested_company_folder
 - suggested_asset_folder
 - suggested_owner_or_project
@@ -347,6 +429,8 @@ Rules:
 - Version must be like v01.
 - Confidence must be between 0 and 1.
 - Suggest fields only; do not output final file paths.
+- Deduce suggested_description from the file's internal content first: title, subject, heading, project line, or first meaningful heading. Use filename/path only if content is not useful.
+- suggested_description should be concise, specific, and kebab-case style text suitable for the DESCRIPTION token.
 
 Allowed phase codes: {phase_codes}
 Allowed status tags: {status_tags}
@@ -420,7 +504,7 @@ def _merge_suggestion_payload(base: Dict[str, Any], payload: Mapping[str, Any]) 
 
 def suggest_row(row: Mapping[str, Any], policy: Mapping[str, Any], config: Optional[SuggestionConfig] = None) -> Dict[str, Any]:
     config = config or SuggestionConfig()
-    base = _heuristic_suggestion(row, policy)
+    base = _heuristic_suggestion(row, policy, config=config)
     prompt = build_prompt_for_row(row, policy, config=config)
     base['suggestion_prompt'] = prompt
 
@@ -432,6 +516,8 @@ def suggest_row(row: Mapping[str, Any], policy: Mapping[str, Any], config: Optio
         parsed = response.get('parsed') or {}
         merged = _merge_suggestion_payload(base, parsed)
         merged['suggestion_source'] = 'ollama'
+        if not merged.get('suggested_description_source') and merged.get('suggested_description'):
+            merged['suggested_description_source'] = 'ollama_content_inference'
         merged['suggestion_raw_response'] = response.get('raw', '')
         if 'suggestion_confidence' in parsed:
             try:
