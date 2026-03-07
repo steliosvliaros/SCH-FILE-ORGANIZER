@@ -22,6 +22,7 @@ Use `policy/SCH_fileserver_policy_v2_4.yaml` as the current source of truth unle
 12. `notebooks/12_llm_suggestions.ipynb`
 13. `notebooks/13_feedback_loop.ipynb`
 14. `notebooks/14_feedback_to_execution.ipynb`
+15. `notebooks/15_ocr_layer.ipynb`
 
 ## What each stage does
 
@@ -39,6 +40,7 @@ Use `policy/SCH_fileserver_policy_v2_4.yaml` as the current source of truth unle
 - `12_llm_suggestions`: suggest missing fields for unresolved rows, with content-first description inference.
 - `13_feedback_loop`: accept selected suggestions, rerun deterministic canonicalization, and measure uplift.
 - `14_feedback_to_execution`: promote newly canonical-ready rows back into planner-style outputs and optionally rebuild execution manifests.
+- `15_ocr_layer`: run opt-in OCR on scanned PDFs and image-only files, then feed OCR text back into later review/suggestion steps.
 
 ## Safety rules
 
@@ -47,3 +49,13 @@ Use `policy/SCH_fileserver_policy_v2_4.yaml` as the current source of truth unle
 - Keep the YAML as the source of truth for names and paths.
 - Let the suggestion layer fill missing fields only; do not let it choose final paths directly.
 - Keep rollback manifests and apply logs for every executable batch.
+- OCR is opt-in and should be limited to scanned/image-only files because it is slower and noisier than direct text extraction.
+
+## OCR notes
+
+For `15_ocr_layer`, install OCR dependencies locally if needed:
+
+- `pip install pytesseract pillow pypdfium2`
+- install a local Tesseract OCR binary and make sure it is on your PATH
+
+The OCR notebook is designed to fail per file, not fail the entire run.
