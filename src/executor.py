@@ -56,11 +56,11 @@ def _safe_series(df: pd.DataFrame, name: str, default: Any = None) -> pd.Series:
 
 def normalize_plan_schema(df: pd.DataFrame) -> pd.DataFrame:
     out = ensure_inventory_schema(df)
-    if out.empty:
-        return out
     for col, default in PLAN_DEFAULTS.items():
         if col not in out.columns:
             out[col] = default
+    if out.empty:
+        return out
     out["planner_confidence"] = pd.to_numeric(out["planner_confidence"], errors="coerce").fillna(0.0)
     for col in ["planner_ready", "planner_needs_user_input", "planner_would_change_path"]:
         out[col] = pd.Series(out[col], index=out.index).fillna(False).astype(bool)
@@ -95,7 +95,21 @@ def _build_executable_manifest(frame: pd.DataFrame, config: ManifestConfig) -> t
     candidates = frame[action_mask & ready_mask & target_mask & changed_mask].copy()
     if candidates.empty:
         empty = frame.iloc[0:0].copy()
-        return empty, empty
+        for col in [
+            "execution_operation_id",
+            "execution_action",
+            "execution_status",
+            "execution_blocked",
+            "execution_block_reason",
+            "execution_target_parent",
+            "execution_source_relative_path",
+            "execution_target_relative_path",
+            "execution_source_full_path",
+            "execution_target_full_path",
+        ]:
+            if col not in empty.columns:
+                empty[col] = pd.Series(dtype=object)
+        return empty, empty.copy()
 
     candidates["execution_operation_id"] = candidates.apply(_make_operation_id, axis=1)
     candidates["execution_action"] = "move"

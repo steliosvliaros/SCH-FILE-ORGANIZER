@@ -15,6 +15,13 @@ Use `policy/SCH_fileserver_policy_v2_4.yaml` as the current source of truth unle
 5. `notebooks/05_review_outputs.ipynb`
 6. `notebooks/06_planner.ipynb`
 7. `notebooks/07_execution_manifest.ipynb`
+8. `notebooks/08_apply_changes.ipynb`
+9. `notebooks/09_rollback.ipynb`
+10. `notebooks/10_post_apply_validation.ipynb`
+11. `notebooks/11_canonical_rename_engine.ipynb`
+12. `notebooks/12_llm_suggestions.ipynb`
+13. `notebooks/13_feedback_loop.ipynb`
+14. `notebooks/14_feedback_to_execution.ipynb`
 
 ## What each stage does
 
@@ -25,20 +32,22 @@ Use `policy/SCH_fileserver_policy_v2_4.yaml` as the current source of truth unle
 - `05_review_outputs`: merge outputs into one review frame.
 - `06_planner`: create a conservative dry-run move/keep plan.
 - `07_execution_manifest`: split the dry-run plan into executable manifest, keep register, review queue, blocked rows, and rollback manifest.
+- `08_apply_changes`: apply a small approved batch with dry-run default and logging.
+- `09_rollback`: reverse rows that were actually moved.
+- `10_post_apply_validation`: compare plan, apply log, and live filesystem state after a batch.
+- `11_canonical_rename_engine`: deterministically build canonical company/asset/path/name targets from the YAML.
+- `12_llm_suggestions`: suggest missing fields for unresolved rows, with content-first description inference.
+- `13_feedback_loop`: accept selected suggestions, rerun deterministic canonicalization, and measure uplift.
+- `14_feedback_to_execution`: promote newly canonical-ready rows back into planner-style outputs and optionally rebuild execution manifests.
 
 ## Safety rules
 
 - Work on a copied sandbox first, never the live master tree.
 - Keep every stage dry-run until the review outputs look correct.
-- Do not auto-enable special-folder conventions unless you intentionally adopt them.
-- Keep rollback manifests for every executable batch.
+- Keep the YAML as the source of truth for names and paths.
+- Let the suggestion layer fill missing fields only; do not let it choose final paths directly.
+- Keep rollback manifests and apply logs for every executable batch.
 
+## 19 Batch presets
 
-## 17 OCR feedback to execution
-
-Use `notebooks/17_ocr_feedback_to_execution.ipynb` to promote rows from `ocr_canonical_feedback_rerun_*` back into planner-style outputs and optionally rebuild execution manifests. This keeps OCR-rescued files on the same controlled path as the normal feedback loop.
-
-
-## 18 Master orchestration
-
-Use `notebooks/18_master_orchestration.ipynb` to inspect which outputs already exist, build a recommended run plan for the selected branch (core / quality / OCR / ops), export `pipeline_status_latest.csv` and `pipeline_plan_latest.csv`, and identify the next notebook to run without making any file changes.
+Use `notebooks/19_batch_presets.ipynb` to choose a practical preset mode such as `review_only`, `canonicalize_unresolved`, `ocr_rescue`, `promote_to_execution`, `apply_small_live_batch`, or `rollback_last_batch`. It exports preset-specific summary, status, and plan tables and tells you the next notebook to run for that mode.
