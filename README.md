@@ -1,35 +1,34 @@
-# SCH File Organizer
+# SCH file organizer starter
 
-Rules-first local file reorganization toolkit for applying the `SCH_fileserver_policy_v2_4.yaml` standard.
+Rules-first local file-server reorganization scaffold for VS Code + Miniconda + Jupyter.
 
-## Current scope
+## Working policy
 
-- Validate and inspect policy YAML
-- Inventory folders recursively with hashes and path-risk indicators
-- Apply deterministic first-pass rules to inventory outputs
-- Produce dry-run classification tables for manual review in Jupyter / VS Code
-- Extract text from common document types for downstream review and classification
-- Build a conservative dry-run planning table for move/keep/manual-review decisions
+Use `policy/SCH_fileserver_policy_v2_4.yaml` as the current source of truth unless you explicitly supersede it.
 
-## Recommended workflow
+## Suggested run order
 
-1. Run `notebooks/01_policy_check.ipynb`
-2. Run `notebooks/02_inventory.ipynb` on a copied sandbox folder
-3. Run `notebooks/03_rule_classification.ipynb`
-4. Run `notebooks/04_extract_text.ipynb` to enrich inventory rows with extracted text
-5. Run `notebooks/05_review_outputs.ipynb` to inspect duplicates, junk, path risks, and review queues
-6. Run `notebooks/06_planner.ipynb` to generate a dry-run move/keep plan
+1. `notebooks/01_policy_check.ipynb`
+2. `notebooks/02_inventory.ipynb`
+3. `notebooks/03_rule_classification.ipynb`
+4. `notebooks/04_extract_text.ipynb`
+5. `notebooks/05_review_outputs.ipynb`
+6. `notebooks/06_planner.ipynb`
+7. `notebooks/07_execution_manifest.ipynb`
 
-## Layout
+## What each stage does
 
-- `policy/` source-of-truth YAML
-- `src/` reusable modules
-- `notebooks/` runnable VS Code notebooks
-- `data/outputs/` generated inventory, review, and planning files
+- `01_policy_check`: load and validate the YAML policy.
+- `02_inventory`: scan a sandbox folder and write inventory CSV/Parquet.
+- `03_rule_classification`: apply deterministic policy rules to inventory rows.
+- `04_extract_text`: extract text previews from supported file types.
+- `05_review_outputs`: merge outputs into one review frame.
+- `06_planner`: create a conservative dry-run move/keep plan.
+- `07_execution_manifest`: split the dry-run plan into executable manifest, keep register, review queue, blocked rows, and rollback manifest.
 
-## Safety
+## Safety rules
 
-- Dry-run only
-- No file moves or renames yet
-- Duplicate and superseded routing stay manual by default under `v2_4`
-- Test on a copied sandbox, not the live file server
+- Work on a copied sandbox first, never the live master tree.
+- Keep every stage dry-run until the review outputs look correct.
+- Do not auto-enable special-folder conventions unless you intentionally adopt them.
+- Keep rollback manifests for every executable batch.
