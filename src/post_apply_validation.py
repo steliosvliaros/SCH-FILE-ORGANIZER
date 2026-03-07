@@ -200,6 +200,17 @@ def build_post_apply_validation(
     if "apply_message" not in base.columns and "apply_message_log" in base.columns:
         base["apply_message"] = base["apply_message_log"]
 
+    for col, default in {
+        "apply_status": "unknown",
+        "apply_dry_run": False,
+        "apply_message": pd.NA,
+    }.items():
+        if col not in base.columns:
+            base[col] = default
+
+    base["apply_status"] = base["apply_status"].map(_normalize_status)
+    base["apply_dry_run"] = base["apply_dry_run"].fillna(False).astype(bool)
+
     base["execution_source_full_path_resolved"] = _safe_series(base, "execution_source_full_path", pd.NA)
     source_missing_mask = base["execution_source_full_path_resolved"].isna() | base["execution_source_full_path_resolved"].astype(str).eq("")
     base.loc[source_missing_mask, "execution_source_full_path_resolved"] = base.loc[source_missing_mask, "execution_source_relative_path"].map(lambda x: _join_path(config.source_base_path, x))
