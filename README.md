@@ -34,27 +34,6 @@ Use `policy/SCH_fileserver_policy_v2_4.yaml` as the current source of truth unle
 - Keep rollback manifests for every executable batch.
 
 
-## Notebook 08 — Apply changes (still safe by default)
+## Post-apply validation
 
-`notebooks/08_apply_changes.ipynb` uses the executable manifest from notebook 07 and runs a **strictly opt-in** executor.
-
-Safety defaults:
-- dry-run enabled
-- batch size limited
-- no deletes
-- target-path placeholders are blocked
-- full apply log written as CSV, Parquet, and JSONL
-
-Only switch `DRY_RUN = False` after reviewing the manifest and apply log on a sandbox copy.
-
-## Notebook 09 — Rollback applied batch
-
-`notebooks/09_rollback.ipynb` uses the rollback manifest from notebook 07 together with the latest apply log from notebook 08.
-
-Safety defaults:
-- dry-run enabled
-- only operations with `apply_status == "moved"` are eligible
-- batch size limited
-- full rollback log written as CSV, Parquet, and JSONL
-
-If the latest apply log was a dry-run only, rollback runtime rows will correctly be zero.
+Use `notebooks/10_post_apply_validation.ipynb` after any applied batch. It compares the executable manifest, the apply log, and the current filesystem state to verify whether reported moves are actually visible on disk. It exports `post_apply_validation_*.csv` and `post_apply_validation_*.parquet`.
