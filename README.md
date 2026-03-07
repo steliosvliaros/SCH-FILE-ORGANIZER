@@ -32,3 +32,17 @@ Use `policy/SCH_fileserver_policy_v2_4.yaml` as the current source of truth unle
 - Keep every stage dry-run until the review outputs look correct.
 - Do not auto-enable special-folder conventions unless you intentionally adopt them.
 - Keep rollback manifests for every executable batch.
+
+
+## Notebook 08 — Apply changes (still safe by default)
+
+`notebooks/08_apply_changes.ipynb` uses the executable manifest from notebook 07 and runs a **strictly opt-in** executor.
+
+Safety defaults:
+- dry-run enabled
+- batch size limited
+- no deletes
+- target-path placeholders are blocked
+- full apply log written as CSV, Parquet, and JSONL
+
+Only switch `DRY_RUN = False` after reviewing the manifest and apply log on a sandbox copy.
