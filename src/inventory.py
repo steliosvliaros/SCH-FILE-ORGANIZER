@@ -41,6 +41,72 @@ def iter_files(scan_root: Path, follow_symlinks: bool = False) -> Iterable[Path]
             yield path
 
 
+
+
+def _derive_filename(path_like: str) -> str:
+    raw = str(path_like or '').replace('\\', '/')
+    return Path(raw).name
+
+
+def _derive_parent_relative(path_like: str) -> str:
+    raw = str(path_like or '').replace('\\', '/')
+    parent = str(Path(raw).parent)
+    return '' if parent in {'.', ''} else parent.replace('\\', '/')
+
+
+def ensure_inventory_schema(df: pd.DataFrame) -> pd.DataFrame:
+    """Backfill expected inventory columns for older parquet/csv outputs."""
+    out = df.copy()
+    if out.empty:
+        return out
+
+    if 'relative_path' not in out.columns and 'absolute_path' in out.columns:
+        out['relative_path'] = out['absolute_path'].astype(str)
+
+    if 'filename' not in out.columns:
+        out['filename'] = out['relative_path'].astype(str).map(_derive_filename)
+    else:
+        missing = out['filename'].isna() | (out['filename'].astype(str).str.strip() == '')
+        out.loc[missing, 'filename'] = out.loc[missing, 'relative_path'].astype(str).map(_derive_filename)
+
+    if 'suffix' not in out.columns:
+        out['suffix'] = out['filename'].astype(str).map(lambda s: Path(s).suffix.lower())
+    else:
+        missing = out['suffix'].isna() | (out['suffix'].astype(str).str.strip() == '')
+        out.loc[missing, 'suffix'] = out.loc[missing, 'filename'].astype(str).map(lambda s: Path(s).suffix.lower())
+    out['suffix'] = out['suffix'].fillna('').astype(str).str.lower()
+
+    if 'stem' not in out.columns:
+        out['stem'] = out['filename'].astype(str).map(lambda s: Path(s).stem)
+
+    if 'parent_relative' not in out.columns:
+        out['parent_relative'] = out['relative_path'].astype(str).map(_derive_parent_relative)
+
+    if 'path_length' not in out.columns:
+        base_col = 'absolute_path' if 'absolute_path' in out.columns else 'relative_path'
+        out['path_length'] = out[base_col].astype(str).str.len()
+
+    if 'filename_length' not in out.columns:
+        out['filename_length'] = out['filename'].astype(str).str.len()
+
+    if 'depth_segments' not in out.columns:
+        out['depth_segments'] = out['relative_path'].astype(str).map(lambda s: len(Path(str(s).replace('\\', '/')).parts))
+
+    if 'is_hidden' not in out.columns:
+        out['is_hidden'] = out['filename'].astype(str).str.startswith('.')
+
+    if 'is_symlink' not in out.columns:
+        out['is_symlink'] = False
+
+    if 'top_segment' not in out.columns:
+        out['top_segment'] = out['relative_path'].astype(str).map(lambda s: Path(str(s).replace('\\', '/')).parts[0] if Path(str(s).replace('\\', '/')).parts else '')
+
+    if 'hash' in out.columns and 'is_duplicate_hash' not in out.columns:
+        dup_sizes = out.groupby('hash', dropna=False)['hash'].transform('size')
+        out['is_duplicate_hash'] = dup_sizes > 1
+        out['duplicate_group_size'] = dup_sizes
+
+    return out
 def build_inventory(scan_root: str | Path, config: InventoryConfig | None = None) -> pd.DataFrame:
     config = config or InventoryConfig()
     root = Path(scan_root).resolve()
@@ -85,6 +151,7 @@ def build_inventory(scan_root: str | Path, config: InventoryConfig | None = None
     if df.empty:
         return df
 
+    df = ensure_inventory_schema(df)
     df = df.sort_values(["relative_path"]).reset_index(drop=True)
     duplicate_counts = df.groupby("hash")["hash"].transform("size")
     df["duplicate_group_size"] = duplicate_counts

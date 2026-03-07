@@ -12,6 +12,8 @@ import pandas as pd
 from docx import Document
 from pypdf import PdfReader
 
+from .inventory import ensure_inventory_schema
+
 
 TEXT_LIKE_SUFFIXES = {
     ".txt",
@@ -259,6 +261,7 @@ def enrich_inventory_with_text(
     config = config or ExtractConfig()
     if inventory_df.empty:
         return inventory_df.copy()
+    inventory_df = ensure_inventory_schema(inventory_df)
     if path_column not in inventory_df.columns:
         raise KeyError(f"Missing path column: {path_column}")
 
