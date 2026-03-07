@@ -46,3 +46,15 @@ Safety defaults:
 - full apply log written as CSV, Parquet, and JSONL
 
 Only switch `DRY_RUN = False` after reviewing the manifest and apply log on a sandbox copy.
+
+## Notebook 09 — Rollback applied batch
+
+`notebooks/09_rollback.ipynb` uses the rollback manifest from notebook 07 together with the latest apply log from notebook 08.
+
+Safety defaults:
+- dry-run enabled
+- only operations with `apply_status == "moved"` are eligible
+- batch size limited
+- full rollback log written as CSV, Parquet, and JSONL
+
+If the latest apply log was a dry-run only, rollback runtime rows will correctly be zero.

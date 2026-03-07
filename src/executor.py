@@ -61,7 +61,6 @@ PLAN_DEFAULTS: dict[str, Any] = {
     "planner_root_mode": "ASSETS",
 }
 
-
 EXECUTABLE_DEFAULTS: dict[str, Any] = {
     "execution_operation_id": pd.NA,
     "execution_action": "move",
@@ -75,6 +74,15 @@ EXECUTABLE_DEFAULTS: dict[str, Any] = {
     "execution_target_full_path": pd.NA,
 }
 
+ROLLBACK_DEFAULTS: dict[str, Any] = {
+    "rollback_operation_id": pd.NA,
+    "rollback_action": "move_back",
+    "rollback_status": "pending",
+    "rollback_source_relative_path": pd.NA,
+    "rollback_target_relative_path": pd.NA,
+    "rollback_source_full_path": pd.NA,
+    "rollback_target_full_path": pd.NA,
+}
 
 PLACEHOLDER_RE = re.compile(r"\{[^{}]+\}")
 
@@ -83,7 +91,6 @@ def _safe_series(df: pd.DataFrame, name: str, default: Any = None) -> pd.Series:
     if name in df.columns:
         return df[name]
     return pd.Series([default] * len(df), index=df.index)
-
 
 
 def normalize_plan_schema(df: pd.DataFrame) -> pd.DataFrame:
@@ -99,10 +106,14 @@ def normalize_plan_schema(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-
 def normalize_executable_manifest(df: pd.DataFrame) -> pd.DataFrame:
-    out = ensure_inventory_schema(df)
-    out = normalize_plan_schema(out)
+    seeded = df.copy()
+    if 'relative_path' not in seeded.columns:
+        for candidate in ['execution_source_relative_path', 'rollback_source_relative_path', 'absolute_path']:
+            if candidate in seeded.columns:
+                seeded['relative_path'] = seeded[candidate]
+                break
+    out = normalize_plan_schema(ensure_inventory_schema(seeded))
     for col, default in EXECUTABLE_DEFAULTS.items():
         if col not in out.columns:
             out[col] = default
@@ -112,14 +123,26 @@ def normalize_executable_manifest(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def normalize_rollback_manifest(df: pd.DataFrame) -> pd.DataFrame:
+    seeded = df.copy()
+    if 'relative_path' not in seeded.columns:
+        for candidate in ['rollback_source_relative_path', 'execution_source_relative_path', 'absolute_path']:
+            if candidate in seeded.columns:
+                seeded['relative_path'] = seeded[candidate]
+                break
+    out = normalize_executable_manifest(seeded)
+    for col, default in ROLLBACK_DEFAULTS.items():
+        if col not in out.columns:
+            out[col] = default
+    return out
+
 
 def _derive_target_parent(path_like: str | None) -> str:
     if not path_like:
         return ""
     raw = str(path_like).replace("\\", "/")
     parent = str(PurePosixPath(raw).parent)
-    return "" if parent in {".", ""} else parent
-
+    return "" if parent in {"", "."} else parent
 
 
 def _make_operation_id(row: pd.Series) -> str:
@@ -130,12 +153,8 @@ def _make_operation_id(row: pd.Series) -> str:
     return f"op_{hashed:010d}"
 
 
-
 def _contains_placeholder(path_like: str | None) -> bool:
-    if not path_like:
-        return False
-    return bool(PLACEHOLDER_RE.search(str(path_like)))
-
+    return bool(path_like) and bool(PLACEHOLDER_RE.search(str(path_like)))
 
 
 def _build_executable_manifest(frame: pd.DataFrame, config: ManifestConfig) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -182,7 +201,6 @@ def _build_executable_manifest(frame: pd.DataFrame, config: ManifestConfig) -> t
     return normalize_executable_manifest(candidates.reset_index(drop=True)), normalize_executable_manifest(blocked_manifest.reset_index(drop=True))
 
 
-
 def _build_keep_register(frame: pd.DataFrame, config: ManifestConfig) -> pd.DataFrame:
     if not config.include_keep_register:
         return frame.iloc[0:0].copy()
@@ -196,7 +214,6 @@ def _build_keep_register(frame: pd.DataFrame, config: ManifestConfig) -> pd.Data
     keep["keep_status"] = "approved_no_change"
     keep["keep_reason"] = keep["planner_reason"]
     return keep.reset_index(drop=True)
-
 
 
 def _build_review_queue(frame: pd.DataFrame, executable_manifest: pd.DataFrame, keep_register: pd.DataFrame, blocked_manifest: pd.DataFrame) -> pd.DataFrame:
@@ -213,11 +230,10 @@ def _build_review_queue(frame: pd.DataFrame, executable_manifest: pd.DataFrame, 
     return review.reset_index(drop=True)
 
 
-
 def _build_rollback_manifest(executable_manifest: pd.DataFrame) -> pd.DataFrame:
     executable_manifest = normalize_executable_manifest(executable_manifest)
     if executable_manifest.empty:
-        return executable_manifest.copy()
+        return normalize_rollback_manifest(executable_manifest.copy())
     rollback = executable_manifest.copy()
     rollback["rollback_operation_id"] = rollback["execution_operation_id"]
     rollback["rollback_action"] = "move_back"
@@ -226,8 +242,7 @@ def _build_rollback_manifest(executable_manifest: pd.DataFrame) -> pd.DataFrame:
     rollback["rollback_target_relative_path"] = rollback["execution_source_relative_path"]
     rollback["rollback_source_full_path"] = rollback["execution_target_full_path"]
     rollback["rollback_target_full_path"] = rollback["execution_source_full_path"]
-    return rollback.reset_index(drop=True)
-
+    return normalize_rollback_manifest(rollback.reset_index(drop=True))
 
 
 def build_execution_bundle(plan_df: pd.DataFrame, config: ManifestConfig | None = None) -> ManifestBundle:
@@ -244,7 +259,6 @@ def build_execution_bundle(plan_df: pd.DataFrame, config: ManifestConfig | None 
         blocked_manifest=blocked_manifest,
         rollback_manifest=rollback_manifest,
     )
-
 
 
 def save_manifest_bundle(bundle: ManifestBundle, output_dir: str | Path, stem: str) -> dict[str, tuple[Path, Path]]:
@@ -267,7 +281,6 @@ def save_manifest_bundle(bundle: ManifestBundle, output_dir: str | Path, stem: s
     }
 
 
-
 def manifest_summary(bundle: ManifestBundle) -> dict[str, int]:
     return {
         "executable_rows": int(len(bundle.executable_manifest)),
@@ -278,15 +291,12 @@ def manifest_summary(bundle: ManifestBundle) -> dict[str, int]:
     }
 
 
-
 def _resolve_runtime_path(full_path: Any, relative_path: Any, base_path: str | Path | None) -> Path | None:
     if pd.notna(full_path) and str(full_path).strip():
         return Path(str(full_path))
     if base_path is not None and pd.notna(relative_path) and str(relative_path).strip():
-        rel = str(relative_path).replace('/', Path().anchor if False else '/')
         return Path(base_path) / Path(str(relative_path))
     return None
-
 
 
 def apply_manifest(executable_manifest: pd.DataFrame, config: ApplyConfig | None = None) -> pd.DataFrame:
@@ -352,7 +362,7 @@ def apply_manifest(executable_manifest: pd.DataFrame, config: ApplyConfig | None
                     shutil.move(str(source_path), str(target_path))
                     status = "moved"
                     reason = "move_completed"
-            except Exception as exc:  # pragma: no cover - defensive runtime path
+            except Exception as exc:  # pragma: no cover
                 status = "error"
                 reason = f"{type(exc).__name__}: {exc}"
                 if config.stop_on_error:
@@ -384,16 +394,9 @@ def apply_manifest(executable_manifest: pd.DataFrame, config: ApplyConfig | None
     return pd.DataFrame.from_records(records)
 
 
-
 def apply_summary(log_df: pd.DataFrame) -> dict[str, int]:
     if log_df.empty:
-        return {
-            "rows": 0,
-            "dry_run_ready": 0,
-            "moved": 0,
-            "blocked": 0,
-            "error": 0,
-        }
+        return {"rows": 0, "dry_run_ready": 0, "moved": 0, "blocked": 0, "error": 0}
     status_counts = log_df.get("apply_status", pd.Series(dtype=object)).value_counts()
     return {
         "rows": int(len(log_df)),
@@ -404,13 +407,105 @@ def apply_summary(log_df: pd.DataFrame) -> dict[str, int]:
     }
 
 
-
 def save_apply_log(log_df: pd.DataFrame, output_dir: str | Path, stem: str) -> tuple[Path, Path, Path]:
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     csv_path = output_path / f"apply_log_{stem}.csv"
     parquet_path = output_path / f"apply_log_{stem}.parquet"
     jsonl_path = output_path / f"apply_log_{stem}.jsonl"
+    log_df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    log_df.to_parquet(parquet_path, index=False)
+    with jsonl_path.open("w", encoding="utf-8") as f:
+        for row in log_df.to_dict(orient="records"):
+            f.write(pd.Series(row).to_json(force_ascii=False) + "\n")
+    return csv_path, parquet_path, jsonl_path
+
+
+def build_rollback_runtime_manifest(rollback_manifest: pd.DataFrame, apply_log: pd.DataFrame | None = None) -> pd.DataFrame:
+    rollback = normalize_rollback_manifest(rollback_manifest)
+    if rollback.empty:
+        return normalize_executable_manifest(rollback.iloc[0:0].copy())
+
+    runtime = rollback.copy()
+    if apply_log is not None and not apply_log.empty and "execution_operation_id" in apply_log.columns:
+        status_series = apply_log.get("apply_status", pd.Series(dtype=object)).astype(str)
+        moved_ops = set(apply_log.loc[status_series.eq("moved"), "execution_operation_id"].astype(str).tolist())
+        if moved_ops:
+            runtime = runtime[runtime["rollback_operation_id"].astype(str).isin(moved_ops)].copy()
+        else:
+            runtime = runtime.iloc[0:0].copy()
+
+    if runtime.empty:
+        return normalize_executable_manifest(runtime)
+
+    runtime["execution_operation_id"] = runtime["rollback_operation_id"]
+    runtime["execution_action"] = runtime["rollback_action"].fillna("move_back")
+    runtime["execution_status"] = runtime["rollback_status"].fillna("pending")
+    runtime["execution_blocked"] = False
+    runtime["execution_block_reason"] = pd.NA
+    runtime["execution_source_relative_path"] = runtime["rollback_source_relative_path"]
+    runtime["execution_target_relative_path"] = runtime["rollback_target_relative_path"]
+    runtime["execution_source_full_path"] = runtime["rollback_source_full_path"]
+    runtime["execution_target_full_path"] = runtime["rollback_target_full_path"]
+    runtime["execution_target_parent"] = runtime["execution_target_relative_path"].astype(str).map(_derive_target_parent)
+
+    placeholder_mask = runtime["execution_target_relative_path"].astype(str).map(_contains_placeholder) | runtime["execution_source_relative_path"].astype(str).map(_contains_placeholder)
+    runtime.loc[placeholder_mask, "execution_blocked"] = True
+    runtime.loc[placeholder_mask, "execution_block_reason"] = "unresolved_placeholder_in_rollback_path"
+    return normalize_executable_manifest(runtime.reset_index(drop=True))
+
+
+def rollback_manifest_apply(rollback_manifest: pd.DataFrame, apply_log: pd.DataFrame | None = None, config: ApplyConfig | None = None) -> pd.DataFrame:
+    runtime = build_rollback_runtime_manifest(rollback_manifest, apply_log=apply_log)
+    log_df = apply_manifest(runtime, config=config)
+    if log_df.empty:
+        return pd.DataFrame(columns=[
+            "rollback_operation_id",
+            "rollback_mode",
+            "rollback_status",
+            "rollback_reason",
+            "rollback_timestamp_utc",
+            "rollback_source_relative_path",
+            "rollback_target_relative_path",
+            "rollback_source_path",
+            "rollback_target_path",
+        ])
+    out = pd.DataFrame({
+        "rollback_operation_id": log_df["execution_operation_id"],
+        "rollback_mode": log_df["apply_mode"],
+        "rollback_status": log_df["apply_status"],
+        "rollback_reason": log_df["apply_reason"],
+        "rollback_timestamp_utc": log_df["apply_timestamp_utc"],
+        "rollback_source_relative_path": log_df["execution_source_relative_path"],
+        "rollback_target_relative_path": log_df["execution_target_relative_path"],
+        "rollback_source_path": log_df["apply_source_path"],
+        "rollback_target_path": log_df["apply_target_path"],
+    })
+    if config is not None and not config.dry_run:
+        out.loc[out["rollback_status"].eq("moved"), "rollback_status"] = "moved_back"
+        out.loc[out["rollback_reason"].eq("move_completed"), "rollback_reason"] = "rollback_completed"
+    return out
+
+
+def rollback_summary(log_df: pd.DataFrame) -> dict[str, int]:
+    if log_df.empty:
+        return {"rows": 0, "dry_run_ready": 0, "moved_back": 0, "blocked": 0, "error": 0}
+    counts = log_df.get("rollback_status", pd.Series(dtype=object)).value_counts()
+    return {
+        "rows": int(len(log_df)),
+        "dry_run_ready": int(counts.get("dry_run_ready", 0)),
+        "moved_back": int(counts.get("moved_back", 0)),
+        "blocked": int(counts.get("blocked", 0)),
+        "error": int(counts.get("error", 0)),
+    }
+
+
+def save_rollback_log(log_df: pd.DataFrame, output_dir: str | Path, stem: str) -> tuple[Path, Path, Path]:
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    csv_path = output_path / f"rollback_log_{stem}.csv"
+    parquet_path = output_path / f"rollback_log_{stem}.parquet"
+    jsonl_path = output_path / f"rollback_log_{stem}.jsonl"
     log_df.to_csv(csv_path, index=False, encoding="utf-8-sig")
     log_df.to_parquet(parquet_path, index=False)
     with jsonl_path.open("w", encoding="utf-8") as f:
