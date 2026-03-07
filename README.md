@@ -19,6 +19,7 @@ Use `policy/SCH_fileserver_policy_v2_4.yaml` as the current source of truth unle
 9. `notebooks/09_rollback.ipynb`
 10. `notebooks/10_post_apply_validation.ipynb`
 11. `notebooks/11_canonical_rename_engine.ipynb`
+12. `notebooks/12_llm_suggestions.ipynb`
 
 ## What each stage does
 
@@ -33,6 +34,7 @@ Use `policy/SCH_fileserver_policy_v2_4.yaml` as the current source of truth unle
 - `09_rollback`: reverse rows that were actually moved.
 - `10_post_apply_validation`: verify what the batch intended, what the apply log reported, and what now exists on disk.
 - `11_canonical_rename_engine`: build deterministic canonical target names and paths from the YAML, surface unresolved fields, and apply long-path shortening before any future LLM suggestion step.
+- `12_llm_suggestions`: create suggestions only for unresolved rows. It defaults to heuristic-only mode and can optionally call a local Ollama model to fill missing fields with confidence and evidence.
 
 ## Safety rules
 
