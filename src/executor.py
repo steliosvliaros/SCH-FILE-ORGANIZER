@@ -34,14 +34,53 @@ class ManifestBundle:
     rollback_manifest: pd.DataFrame
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class ApplyConfig:
-    dry_run: bool = True
-    batch_limit: int | None = 20
-    allow_live_apply: bool = False
-    create_target_parent_dirs: bool = True
-    block_unresolved_placeholders: bool = True
-    move_mode: str = "shutil_move"
+    dry_run: bool
+    batch_limit: int | None
+    allow_live_apply: bool
+    create_target_parent_dirs: bool
+    block_unresolved_placeholders: bool
+    move_mode: str
+    overwrite_existing: bool
+    source_base_path: str | None
+    target_base_path: str | None
+
+    def __init__(
+        self,
+        dry_run: bool = True,
+        batch_limit: int | None = 20,
+        allow_live_apply: bool = False,
+        create_target_parent_dirs: bool = True,
+        block_unresolved_placeholders: bool = True,
+        move_mode: str = "shutil_move",
+        overwrite_existing: bool = False,
+        source_base_path: str | None = None,
+        target_base_path: str | None = None,
+        batch_size: int | None = None,
+        create_target_parents: bool | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if batch_size is not None:
+            batch_limit = batch_size
+        if create_target_parents is not None:
+            create_target_parent_dirs = create_target_parents
+        if "create_target_parent_dirs" in kwargs and create_target_parents is None:
+            create_target_parent_dirs = kwargs.pop("create_target_parent_dirs")
+        if "batch_limit" in kwargs and batch_size is None:
+            batch_limit = kwargs.pop("batch_limit")
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            raise TypeError(f"Unexpected ApplyConfig argument(s): {unexpected}")
+        object.__setattr__(self, "dry_run", bool(dry_run))
+        object.__setattr__(self, "batch_limit", batch_limit)
+        object.__setattr__(self, "allow_live_apply", bool(allow_live_apply))
+        object.__setattr__(self, "create_target_parent_dirs", bool(create_target_parent_dirs))
+        object.__setattr__(self, "block_unresolved_placeholders", bool(block_unresolved_placeholders))
+        object.__setattr__(self, "move_mode", str(move_mode))
+        object.__setattr__(self, "overwrite_existing", bool(overwrite_existing))
+        object.__setattr__(self, "source_base_path", None if source_base_path is None else str(source_base_path))
+        object.__setattr__(self, "target_base_path", None if target_base_path is None else str(target_base_path))
 
 
 PLAN_DEFAULTS: dict[str, Any] = {
@@ -244,6 +283,18 @@ def manifest_summary(bundle: ManifestBundle) -> dict[str, int]:
     }
 
 
+def _resolve_full_path(base_path: str | None, relative_path: Any) -> str | None:
+    if relative_path is None or pd.isna(relative_path):
+        return None
+    rel = str(relative_path)
+    if not rel:
+        return None
+    p = Path(rel)
+    if p.is_absolute() or base_path is None:
+        return str(p)
+    return str(Path(base_path) / Path(rel))
+
+
 def _has_placeholder(value: Any) -> bool:
     if value is None or pd.isna(value):
         return False
@@ -277,27 +328,42 @@ def apply_manifest(executable_manifest: pd.DataFrame, config: ApplyConfig | None
         elif _has_placeholder(target) and config.block_unresolved_placeholders:
             status = "blocked"
             message = "target path contains unresolved placeholder"
-        elif not source or pd.isna(source):
-            status = "error"
-            message = "missing execution_source_full_path"
-        elif not target or pd.isna(target):
-            status = "error"
-            message = "missing execution_target_full_path"
-        elif config.dry_run or not config.allow_live_apply:
-            status = "dry_run_ready"
-            message = "validated for dry run; no filesystem changes applied"
         else:
-            src = Path(str(source))
-            dst = Path(str(target))
-            try:
-                if config.create_target_parent_dirs:
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(src), str(dst))
-                status = "moved"
-                message = "move completed"
-            except Exception as exc:
+            if not source or pd.isna(source):
+                source = _resolve_full_path(config.source_base_path, row.get("execution_source_relative_path") or row.get("relative_path"))
+            if not target or pd.isna(target):
+                target = _resolve_full_path(config.target_base_path, row.get("execution_target_relative_path") or row.get("planner_target_relative_path"))
+
+            if not source or pd.isna(source):
                 status = "error"
-                message = f"move failed: {exc}"
+                message = "missing execution_source_full_path"
+            elif not target or pd.isna(target):
+                status = "error"
+                message = "missing execution_target_full_path"
+            elif config.dry_run or not config.allow_live_apply:
+                status = "dry_run_ready"
+                message = "validated for dry run; no filesystem changes applied"
+            else:
+                src = Path(str(source))
+                dst = Path(str(target))
+                try:
+                    if dst.exists() and not config.overwrite_existing:
+                        status = "blocked"
+                        message = "target already exists and overwrite_existing is False"
+                    else:
+                        if config.create_target_parent_dirs:
+                            dst.parent.mkdir(parents=True, exist_ok=True)
+                        if dst.exists() and config.overwrite_existing:
+                            if dst.is_dir():
+                                shutil.rmtree(dst)
+                            else:
+                                dst.unlink()
+                        shutil.move(str(src), str(dst))
+                        status = "moved"
+                        message = "move completed"
+                except Exception as exc:
+                    status = "error"
+                    message = f"move failed: {exc}"
 
         out = row.to_dict()
         out["apply_status"] = status
