@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import Any
 import csv
@@ -38,6 +39,20 @@ TEXT_LIKE_SUFFIXES = {
 PDF_SUFFIXES = {".pdf"}
 DOCX_SUFFIXES = {".docx"}
 XLSX_SUFFIXES = {".xlsx", ".xlsm", ".xltx", ".xltm"}
+
+
+def _to_os_path(path: str | Path) -> str:
+    """Return an OS path string suitable for Win32 long-path access when needed."""
+    raw = str(path)
+    if os.name != "nt":
+        return raw
+
+    normalized = raw.replace("/", "\\")
+    if normalized.startswith("\\\\?\\"):
+        return normalized
+    if normalized.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + normalized.lstrip("\\")
+    return "\\\\?\\" + normalized
 
 
 @dataclass(frozen=True)
@@ -98,7 +113,8 @@ def _preview(text: str, limit: int) -> str:
 
 
 def _read_text_file(path: Path, config: ExtractConfig) -> ExtractResult:
-    raw = path.read_bytes()
+    with open(_to_os_path(path), "rb") as f:
+        raw = f.read()
     encoding_guess = chardet.detect(raw).get("encoding") or "utf-8"
     try:
         text = raw.decode(encoding_guess, errors="replace")
@@ -134,12 +150,13 @@ def _read_text_file(path: Path, config: ExtractConfig) -> ExtractResult:
 
 
 def _read_pdf(path: Path, config: ExtractConfig) -> ExtractResult:
-    reader = PdfReader(str(path))
-    pages_text: list[str] = []
-    pages_read = 0
-    for page in reader.pages[: config.max_pdf_pages]:
-        pages_read += 1
-        pages_text.append(page.extract_text() or "")
+    with open(_to_os_path(path), "rb") as f:
+        reader = PdfReader(f)
+        pages_text: list[str] = []
+        pages_read = 0
+        for page in reader.pages[: config.max_pdf_pages]:
+            pages_read += 1
+            pages_text.append(page.extract_text() or "")
     normalized = _normalize_text("\n\n".join(pages_text))
     extracted_text, truncated = _truncate_text(normalized, config.max_chars_per_file)
     status = "ok" if extracted_text else "empty"
@@ -156,7 +173,8 @@ def _read_pdf(path: Path, config: ExtractConfig) -> ExtractResult:
 
 
 def _read_docx(path: Path, config: ExtractConfig) -> ExtractResult:
-    doc = Document(str(path))
+    with open(_to_os_path(path), "rb") as f:
+        doc = Document(f)
     chunks: list[str] = []
     para_count = 0
     for para in doc.paragraphs:
@@ -187,7 +205,7 @@ def _read_docx(path: Path, config: ExtractConfig) -> ExtractResult:
 
 
 def _read_xlsx(path: Path, config: ExtractConfig) -> ExtractResult:
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    wb = openpyxl.load_workbook(_to_os_path(path), read_only=True, data_only=True)
     parts: list[str] = []
     sheet_count = 0
     for ws in wb.worksheets:
