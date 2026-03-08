@@ -1,0 +1,546 @@
+# SCH File Server Policy v2.5 Final (commented)
+# Practical construction-project version.
+#
+# Design intent:
+# - Keep company folder, asset folder, TYPEID, and filename backbone stable.
+# - Use WORKSTREAM as the physical filing axis.
+# - Keep PHASE in filename/metadata as lifecycle context.
+# - Keep daily user decisions simple.
+# - For FIN and CNT, capture counterparties in the filename/metadata, not in deep folder trees.
+# - Keep Asset Master and Project Controls, but keep them small and disciplined.
+
+version: v2_5_final
+policy_name: SCH File Server Policy v2.5 Final
+policy_status: working_standard
+policy_style: workstream_first_phase_aware
+
+# Top level on the file server: one folder per legal company.
+top_level_folders:
+  - '{NAMECODE}-{TYP3}-{VAT9}'
+
+naming_policy:
+  philosophy: One Asset, One Folder, One Location, Complete History
+
+  company_folder:
+    pattern: '{NAMECODE}-{TYP3}-{VAT9}'
+    fields:
+      NAMECODE: Short company code from company register.
+      TYP3: 3-letter legal form such as AEE/EPE/EEE/OEE/IKE/MIK.
+      VAT9: Full 9-digit VAT, with leading zeros preserved.
+
+  asset_folder:
+    pattern: '{TYPEID}_{PROJECT_NAME}_{LOCATION}'
+    rules:
+      - Use hyphens '-' instead of spaces in PROJECT_NAME and LOCATION.
+      - Avoid special characters; prefer ASCII letters, digits, '-' and '_'.
+      - Keep PROJECT_NAME functional and concise.
+      - Keep LOCATION to the main place identifier only.
+
+  typeid:
+    pattern: '{TYPE}{METRIC}-{SS}'
+    fields:
+      TYPE: 3-letter asset/project type code.
+      METRIC: Encoded characteristic metric as XXpYYY.
+      SS: 2-digit sequence 01-99 for collisions.
+    encoding:
+      types:
+        PVS:
+          label: PV plant
+          characteristic: Capacity
+          base_unit: MW
+          base_value_unit: kW
+          allowed_input_units: [MW, kW, kWp]
+          base_value_rule: convert to MW, then BASE_VALUE(kW)=round(MW*1000)
+          metric_format: XXpYYY where XX=MW integer part, YYY=kW remainder
+          example: 15.473 MW -> 15p473
+        WND:
+          label: Wind farm
+          characteristic: Capacity
+          base_unit: MW
+          base_value_unit: kW
+          allowed_input_units: [MW, kW]
+          base_value_rule: BASE_VALUE(kW)=round(MW*1000)
+          example: 2.000 MW -> 02p000
+        DTC:
+          label: Datacenter
+          characteristic: Contracted IT load
+          base_unit: MW
+          base_value_unit: kW
+          allowed_input_units: [MW, kW]
+          base_value_rule: BASE_VALUE(kW)=round(MW*1000)
+          example: 3.200 MW -> 03p200
+        HTL:
+          label: Hotel
+          characteristic: Beds
+          base_unit: beds
+          base_value_unit: beds
+          allowed_input_units: [beds]
+          base_value_rule: BASE_VALUE=beds (integer)
+          example: 70 beds -> 00p070
+        HYP:
+          label: Hydroponics/Greenhouse
+          characteristic: Cultivation area
+          base_unit: m2
+          base_value_unit: m2
+          allowed_input_units: [m2, ha]
+          base_value_rule: BASE_VALUE(m2)=round(ha*10000) or round(m2)
+          example: 7000 m2 -> 07p000
+        BCH:
+          label: Biochar plant
+          characteristic: Output capacity
+          base_unit: tpy
+          base_value_unit: tpy
+          allowed_input_units: [tpy]
+          base_value_rule: BASE_VALUE=tpy (integer)
+          example: 2500 tpy -> 02p500
+        BMS:
+          label: Biomass plant
+          characteristic: Output capacity
+          base_unit: tpy
+          base_value_unit: tpy
+          allowed_input_units: [tpy]
+          base_value_rule: BASE_VALUE=tpy (integer)
+          example: 12500 tpy -> 12p500
+        HYD:
+          label: Hydrogen
+          characteristic: Production
+          base_unit: kg/day
+          base_value_unit: kg/day
+          allowed_input_units: [kg/day]
+          base_value_rule: BASE_VALUE=kg/day (integer)
+          example: 3000 kg/day -> 03p000
+        BES:
+          label: BESS
+          characteristic: Energy capacity
+          base_unit: kWh
+          base_value_unit: kWh
+          allowed_input_units: [MWh, kWh]
+          base_value_rule: BASE_VALUE(kWh)=round(MWh*1000) or round(kWh)
+          example: 12.5 MWh -> 12p500
+        OTH:
+          label: Other
+          characteristic: User-defined
+          base_unit: unit
+          base_value_unit: unit
+          allowed_input_units: [unit]
+          base_value_rule: BASE_VALUE=unit (integer)
+          example: 42 -> 00p042
+
+  filenames:
+    internal:
+      template: '{TYPEID}_{PHASE}_{DOCTYPE}_{DESCRIPTION}_{DATE}_{VERSION}_{STATUS}.{EXT}'
+      rules:
+        - DESCRIPTION must use hyphens '-' and no spaces.
+        - DATE format is YYYYMMDD.
+        - VERSION format is v01, v02, ...
+        - STATUS must be from controlled vocabulary.
+        - For FIN and CNT, DESCRIPTION must begin with the direct COUNTERPARTY token in uppercase.
+        - If OTHER_COUNTERPARTY exists for FIN or CNT, DESCRIPTION must begin as {COUNTERPARTY}-to-{OTHER_COUNTERPARTY}-...
+        - In FIN and CNT descriptions, counterparty tokens are uppercase; remaining words are lowercase and hyphenated.
+        - Example single counterparty: HABITATIO-design-invoice
+        - Example two-party flow: HABITATIO-to-EXINTAVELONIS-subcontractor-payment-equipment
+    portable_export:
+      template: '{COMPANY_FOLDER}_{INTERNAL_FILENAME}'
+      rule: Use portable filenames only for exports, portals, and email packs; do not rename originals.
+
+  constraints:
+    max_full_path_chars: 240
+    max_filename_chars: 120
+    max_foldername_chars: 64
+    max_depth_segments: 12
+
+controlled_vocabularies:
+  # PHASE = lifecycle context kept in filename and metadata.
+  phase_codes:
+    FS: Feasibility
+    LA: Land Acquisition
+    PM: Permitting
+    DE: Design & Engineering
+    FN: Financing
+    PR: Procurement
+    CN: Construction
+    CM: Commissioning & COD
+    OP: Operations
+    DC: Decommissioning
+
+  # WORKSTREAM = physical foldering axis used for filing.
+  workstream_codes:
+    AM: Asset Master
+    PC: Project Controls
+    LS: Land & Site
+    PMT: Permitting & Approvals
+    TDE: Technical Design
+    PRC: Commercial & Procurement
+    FNI: Finance & Insurance
+    CND: Construction Delivery
+    OPM: Operations & Maintenance
+    DCM: Decommissioning
+
+  status_tags: [DRAFT, REVIEW, REVISED, FINAL, APPROVED, SIGNED, SENT, RECEIVED, SUPERSEDED, CANCELLED]
+
+  # Only expose these to users when relevant.
+  user_selectable_subtypes:
+    deliverable_stage: [CONCEPT, PRELIM, TENDER, IFC, SHOP, ASBUILT, RECORD]
+    payment_category: [GENERAL, LAND, PERMIT_FEES, DESIGN, BANKING, SUPPLIER, IPC, RETENTION, O_M, DECOM]
+    contract_category: [GENERAL, LAND, CONSULTANT, PERMITTING_SUPPORT, TERM_SHEET, PO, SUPPLY, SUBCONTRACT, EPC, O_M]
+
+  # Keep these mainly as metadata; users should not need them in most daily filing.
+  system_metadata_only:
+    correspondence_scope: [GENERAL, PROJECT_CONTROLS, PERMITTING, TECHNICAL, LENDER, VENDOR, SITE, O_M]
+    report_scope: [GENERAL, PROJECT_CONTROLS, TECHNICAL, FINANCIAL, QAQC, HSE, O_M]
+    drawing_discipline: [GEN, ARC, STR, CIV, MEP, EL, ICT, FIRE, HVAC, PIP]
+    counterparty_role: [OWNER, CONSULTANT, LENDER, SUPPLIER, CONTRACTOR, SUBCONTRACTOR, OPERATOR]
+
+folder_structure:
+  roots:
+    COMPANY_ROOT:
+      description: Company root named by company_folder.pattern.
+      path_template: '{COMPANY_FOLDER}'
+      subfolders:
+        - CORPORATE   # Company-level legal, governance, statutory, HR, and non-asset records.
+        - TEMPLATES   # Shared templates and standard reference material.
+        - ARCHIVE     # Closed/cancelled/sold asset folders by year.
+        - ASSETS      # All active asset folders for this company.
+
+    ASSETS:
+      description: Active assets for the selected company.
+      path_template: '{COMPANY_FOLDER}/ASSETS/{ASSET_FOLDER}'
+
+    ARCHIVE:
+      description: Archived assets for the selected company, filed by year.
+      path_template: '{COMPANY_FOLDER}/ARCHIVE/{YEAR}/{ASSET_FOLDER}'
+
+    CORPORATE:
+      description: Company-wide records not belonging to one asset.
+      path_template: '{COMPANY_FOLDER}/CORPORATE'
+
+    TEMPLATES:
+      description: Standard forms, templates, boilerplates, and filing aids.
+      path_template: '{COMPANY_FOLDER}/TEMPLATES'
+
+  asset_standard_subfolders:
+    status_files:
+      - _STATUS_01_PIPELINE.txt           # Asset exists but has not materially entered active development.
+      - _STATUS_02_UNDER_DEVELOPMENT.txt  # Asset is under active development and approvals/design/commercial work.
+      - _STATUS_03_UNDER_CONSTRUCTION.txt # Asset is under construction execution.
+      - _STATUS_04_OPERATIONAL.txt        # Asset is in operation or steady-state service.
+
+    # Main workstream folders inside each asset.
+    workstream_folders:
+      - 00_ASSET_MASTER          # Keep small: core asset identity, key register, and fixed reference data only.
+      - 01_PROJECT_CONTROLS      # Keep small: programme, progress, cost/risk/change, and meeting/action control.
+      - 02_LAND_SITE             # Land, titles, surveys, geotech, site data, and land-related agreements/payments.
+      - 03_PERMITTING_APPROVALS  # Applications, permits, approvals, authority responses, and permit-related support.
+      - 04_TECHNICAL_DESIGN      # Studies, drawings, models, calculations, and design consultant records.
+      - 05_COMMERCIAL_PROCUREMENT # RFQs, bids, supply contracts, deliveries, and procurement commercial records.
+      - 06_FINANCE_INSURANCE     # Budgets, banking, insurance, payables, receivables, tax, and finance reporting.
+      - 07_CONSTRUCTION_DELIVERY # Site execution, progress, quantities, QAQC/HSE, construction contracts, handover.
+      - 08_OPERATIONS_MAINTENANCE # O&M records, service contracts, events, and operating payments.
+      - 09_DECOMMISSIONING       # Closure, sale/disposal, dismantling, and end-of-life records.
+      - 99_EXPORTS               # Temporary export packs and transmittal bundles; not a primary filing home.
+
+    # Fixed subfolders: intentionally light and not over-engineered.
+    workstream_subfolders_fixed:
+      00_ASSET_MASTER:
+        - 01_IDENTITY_REGISTERS      # Asset ID sheet, key registers, and official reference identifiers.
+        - 02_MASTER_DATA             # Core master data and stable summary sheets.
+        - 03_STATUS_MILESTONES       # Status notes, milestone snapshots, and high-level asset state records.
+        - 99_MISC_REVIEW             # Short-term review area for unclear files.
+
+      01_PROJECT_CONTROLS:
+        - 01_PROGRAMME_WBS           # Programme, baseline schedule, WBS, and planning logic.
+        - 02_PROGRESS_REPORTING      # Periodic progress reports, dashboards, and management updates.
+        - 03_COST_RISK_CHANGE        # Cost tracking, risk registers, change control, and variations master view.
+        - 04_MEETINGS_ACTIONS        # Minutes, meeting packs, decision logs, and action trackers.
+        - 99_MISC_REVIEW             # Short-term review area for unclear files.
+
+      02_LAND_SITE:
+        - 01_OWNERSHIP_SURVEYS       # Titles, cadastral docs, topographic surveys, and land verification.
+        - 02_AGREEMENTS              # Land agreements, leases, easements, access rights.
+        - 03_SITE_INVESTIGATIONS     # Geotechnical, environmental, and site investigation outputs.
+        - 04_PAYMENTS_COMPENSATIONS  # Landowner payments, compensations, and site-related costs.
+        - 99_MISC_REVIEW             # Short-term review area for unclear files.
+
+      03_PERMITTING_APPROVALS:
+        - 01_PERMITS_LICENSES        # Issued permits, licences, approvals, and formal decision letters.
+        - 02_SUBMISSIONS_RESPONSES   # Applications, submission bundles, comments, and responses.
+        - 03_SUPPORT_CONTRACTS       # External support contracts tied mainly to permitting work.
+        - 04_FEES_PAYMENTS           # Permit fees, authority charges, and related payment records.
+        - 99_MISC_REVIEW             # Short-term review area for unclear files.
+
+      04_TECHNICAL_DESIGN:
+        - 01_STUDIES                 # Studies, reports, and technical engineering deliverables.
+        - 02_DRAWINGS                # Concept, prelim, tender, and other design-stage drawings.
+        - 03_MODELS_CALCULATIONS     # Models, calculations, simulations, and analysis files.
+        - 04_CONSULTANT_CONTRACTS    # Design consultant contracts and related commercial support.
+        - 05_PAYMENTS                # Design invoices and consultant payments.
+        - 99_MISC_REVIEW             # Short-term review area for unclear files.
+
+      05_COMMERCIAL_PROCUREMENT:
+        - 01_RFQ_BIDS_EVALUATION     # RFQs, bids, clarifications, comparisons, and evaluations.
+        - 02_PURCHASE_ORDERS_SUPPLY_CONTRACTS # POs, supply contracts, and commercial award files.
+        - 03_DELIVERIES_EXPEDITING   # Delivery tracking, expediting, shipping, and logistics.
+        - 04_PAYMENTS                # Procurement deposits, supplier invoices, and procurement payments.
+        - 99_MISC_REVIEW             # Short-term review area for unclear files.
+
+      06_FINANCE_INSURANCE:
+        - 01_BUDGETS_CASHFLOW        # Budget, forecast, cashflow, and finance planning files.
+        - 02_BANKS_INSURANCE         # Banking, lender, guarantee, and insurance files.
+        - 03_PAYABLES                # All outgoing payments. Do not split into supplier/contractor/subcontractor folders.
+        - 04_RECEIVABLES             # Incoming payments, credits, reimbursements, and recoveries.
+        - 05_TAX_STATUTORY           # Tax, statutory, and compliance-related finance records.
+        - 06_COST_REPORTING          # Cost summaries, finance reporting, and management packs.
+        - 99_MISC_REVIEW             # Short-term review area for unclear files.
+
+      07_CONSTRUCTION_DELIVERY:
+        - 01_DRAWINGS                # IFC, shop, site markups, and construction-use drawings.
+        - 02_SITE_DIARY_PROGRESS     # Daily/weekly progress, site diaries, and execution follow-up.
+        - 03_BOQ_BOM_QUANTITIES      # BOQ, BOM, take-off, measurements, and quantity control.
+        - 04_CONTRACTS_SUBCONTRACTS  # Construction contracts, subcontracts, and associated commercial docs.
+        - 05_PAYMENTS_IPC_COST       # IPCs, construction payments, backup, and payment substantiation.
+        - 06_QAQC_HSE                # QAQC, inspections, tests, safety, and HSE records.
+        - 07_HANDOVER_CLOSEOUT       # As-built, testing, manuals, training, and closeout handover.
+        - 99_MISC_REVIEW             # Short-term review area for unclear files.
+
+      08_OPERATIONS_MAINTENANCE:
+        - 01_ASSET_DOCUMENTS         # Record docs, manuals, and core operating references.
+        - 02_SERVICE_CONTRACTS       # O&M and service contracts.
+        - 03_PAYMENTS                # Operating payments, maintenance invoices, and recurring costs.
+        - 04_REPORTING_EVENTS        # Operations reporting, incidents, events, and performance summaries.
+        - 99_MISC_REVIEW             # Short-term review area for unclear files.
+
+      09_DECOMMISSIONING:
+        - 01_STUDIES_PERMITS         # Decommissioning studies, closure permits, and approvals.
+        - 02_CLOSING_AGREEMENTS      # Sale, disposal, dismantling, and closing agreements.
+        - 03_PAYMENTS                # Decommissioning costs, closure payments, and related invoices.
+        - 04_DISPOSAL_SALE_RECORDS   # Disposal, transfer, and asset exit records.
+        - 99_MISC_REVIEW             # Short-term review area for unclear files.
+
+    special_top_level_folders:
+      - _SUPERSEDED  # Older replaced files retained for traceability.
+      - _DUPLICATED  # Exact duplicates moved out of the live structure.
+      - _DEPRECATED  # Obsolete files retained only for reference.
+      - _BACKUP      # Emergency backup files outside the live filing flow.
+
+user_facing_filing_rules:
+  principle:
+    - Foldering is workstream-first.
+    - PHASE stays in filename and metadata.
+    - Users should usually choose only asset, workstream, doc_type, description, date, version, status.
+    - For FIN and CNT, users must also choose COUNTERPARTY; OTHER_COUNTERPARTY is optional.
+    - deliverable_stage is only needed for drawings/studies where stage matters.
+    - payment_category is only needed when finance routing needs refinement.
+    - contract_category is only needed when contract routing needs refinement.
+    - correspondence_scope, report_scope, drawing_discipline, and counterparty_role should normally be auto-filled.
+    - Do not create folder-per-company structures below workstream folders.
+    - Counterparty identification belongs in filename and metadata, not in extra folder layers.
+
+  finance_team_minimum_inputs:
+    - asset
+    - workstream
+    - doc_type
+    - counterparty_name
+    - description
+    - date
+    - version
+    - status
+
+  finance_team_optional_inputs:
+    - other_counterparty_name
+    - payment_category
+
+  project_manager_minimum_inputs:
+    - asset
+    - workstream
+    - doc_type
+    - description
+    - date
+    - version
+    - status
+
+  project_manager_optional_inputs:
+    - deliverable_stage
+    - contract_category
+
+routing_rules:
+  # Workstream selection decides the main folder family.
+  workstream_folder_map:
+    AM: 00_ASSET_MASTER
+    PC: 01_PROJECT_CONTROLS
+    LS: 02_LAND_SITE
+    PMT: 03_PERMITTING_APPROVALS
+    TDE: 04_TECHNICAL_DESIGN
+    PRC: 05_COMMERCIAL_PROCUREMENT
+    FNI: 06_FINANCE_INSURANCE
+    CND: 07_CONSTRUCTION_DELIVERY
+    OPM: 08_OPERATIONS_MAINTENANCE
+    DCM: 09_DECOMMISSIONING
+
+  document_type_routing:
+    PER:
+      strategy: fixed_folder
+      fixed_folder: 03_PERMITTING_APPROVALS/01_PERMITS_LICENSES
+
+    DRWTEC:
+      strategy: by_deliverable_stage
+      fallback_folder: 04_TECHNICAL_DESIGN/02_DRAWINGS
+      routes:
+        CONCEPT: 04_TECHNICAL_DESIGN/02_DRAWINGS
+        PRELIM: 04_TECHNICAL_DESIGN/02_DRAWINGS
+        TENDER: 04_TECHNICAL_DESIGN/02_DRAWINGS
+        IFC: 07_CONSTRUCTION_DELIVERY/01_DRAWINGS
+        SHOP: 07_CONSTRUCTION_DELIVERY/01_DRAWINGS
+        ASBUILT: 07_CONSTRUCTION_DELIVERY/07_HANDOVER_CLOSEOUT
+        RECORD: 08_OPERATIONS_MAINTENANCE/01_ASSET_DOCUMENTS
+
+    SDYTEC:
+      strategy: by_deliverable_stage
+      fallback_folder: 04_TECHNICAL_DESIGN/01_STUDIES
+      routes:
+        CONCEPT: 04_TECHNICAL_DESIGN/01_STUDIES
+        PRELIM: 04_TECHNICAL_DESIGN/01_STUDIES
+        TENDER: 04_TECHNICAL_DESIGN/01_STUDIES
+        IFC: 07_CONSTRUCTION_DELIVERY/01_DRAWINGS
+        ASBUILT: 07_CONSTRUCTION_DELIVERY/07_HANDOVER_CLOSEOUT
+        RECORD: 08_OPERATIONS_MAINTENANCE/01_ASSET_DOCUMENTS
+
+    FIN:
+      strategy: by_workstream_then_optional_payment_category
+      fallback_folder: 06_FINANCE_INSURANCE/03_PAYABLES
+      notes:
+        - Keep one PAYABLES folder under finance to avoid extra daily classification burden.
+        - Use COUNTERPARTY and optional OTHER_COUNTERPARTY in filename/metadata instead of per-company folders.
+      workstream_routes:
+        FNI: 06_FINANCE_INSURANCE/03_PAYABLES
+        LS: 02_LAND_SITE/04_PAYMENTS_COMPENSATIONS
+        PMT: 03_PERMITTING_APPROVALS/04_FEES_PAYMENTS
+        TDE: 04_TECHNICAL_DESIGN/05_PAYMENTS
+        PRC: 05_COMMERCIAL_PROCUREMENT/04_PAYMENTS
+        CND: 07_CONSTRUCTION_DELIVERY/05_PAYMENTS_IPC_COST
+        OPM: 08_OPERATIONS_MAINTENANCE/03_PAYMENTS
+        DCM: 09_DECOMMISSIONING/03_PAYMENTS
+
+    CNT:
+      strategy: by_workstream_then_optional_contract_category
+      fallback_folder: 05_COMMERCIAL_PROCUREMENT/02_PURCHASE_ORDERS_SUPPLY_CONTRACTS
+      notes:
+        - Use COUNTERPARTY and optional OTHER_COUNTERPARTY in filename/metadata instead of per-company folders.
+      workstream_routes:
+        LS: 02_LAND_SITE/02_AGREEMENTS
+        PMT: 03_PERMITTING_APPROVALS/03_SUPPORT_CONTRACTS
+        TDE: 04_TECHNICAL_DESIGN/04_CONSULTANT_CONTRACTS
+        PRC: 05_COMMERCIAL_PROCUREMENT/02_PURCHASE_ORDERS_SUPPLY_CONTRACTS
+        CND: 07_CONSTRUCTION_DELIVERY/04_CONTRACTS_SUBCONTRACTS
+        OPM: 08_OPERATIONS_MAINTENANCE/02_SERVICE_CONTRACTS
+        DCM: 09_DECOMMISSIONING/02_CLOSING_AGREEMENTS
+
+    COR:
+      strategy: by_workstream
+      fallback_folder: 01_PROJECT_CONTROLS/04_MEETINGS_ACTIONS
+      workstream_routes:
+        PC: 01_PROJECT_CONTROLS/04_MEETINGS_ACTIONS
+        PMT: 03_PERMITTING_APPROVALS/02_SUBMISSIONS_RESPONSES
+        TDE: 04_TECHNICAL_DESIGN/99_MISC_REVIEW
+        PRC: 05_COMMERCIAL_PROCUREMENT/99_MISC_REVIEW
+        CND: 07_CONSTRUCTION_DELIVERY/02_SITE_DIARY_PROGRESS
+        OPM: 08_OPERATIONS_MAINTENANCE/04_REPORTING_EVENTS
+
+    REP:
+      strategy: by_workstream
+      fallback_folder: 01_PROJECT_CONTROLS/02_PROGRESS_REPORTING
+      workstream_routes:
+        PC: 01_PROJECT_CONTROLS/02_PROGRESS_REPORTING
+        TDE: 04_TECHNICAL_DESIGN/99_MISC_REVIEW
+        FNI: 06_FINANCE_INSURANCE/06_COST_REPORTING
+        CND: 07_CONSTRUCTION_DELIVERY/02_SITE_DIARY_PROGRESS
+        OPM: 08_OPERATIONS_MAINTENANCE/04_REPORTING_EVENTS
+
+    MIN:
+      strategy: by_workstream
+      fallback_folder: 01_PROJECT_CONTROLS/04_MEETINGS_ACTIONS
+
+    DAT:
+      strategy: by_workstream
+      fallback_folder: 00_ASSET_MASTER/02_MASTER_DATA
+
+    IMG:
+      strategy: by_workstream
+      fallback_folder: 07_CONSTRUCTION_DELIVERY/02_SITE_DIARY_PROGRESS
+
+    QAQC:
+      strategy: fixed_folder
+      fixed_folder: 07_CONSTRUCTION_DELIVERY/06_QAQC_HSE
+
+    HSE:
+      strategy: fixed_folder
+      fixed_folder: 07_CONSTRUCTION_DELIVERY/06_QAQC_HSE
+
+required_fields:
+  always_required:
+    - company_folder
+    - asset_folder
+    - type
+    - metric
+    - ss
+    - phase
+    - doc_type
+    - description
+    - date
+    - version
+    - status
+    - owner_or_project
+
+  conditional_required:
+    FIN:
+      - counterparty_name
+    CNT:
+      - counterparty_name
+    DRWTEC:
+      - deliverable_stage
+    SDYTEC:
+      - deliverable_stage
+
+metadata_field_guidance:
+  counterparty_name:
+    description: Direct party on the document or direct commercial counterpart.
+    normalization_rules:
+      - Convert to uppercase token for filename use.
+      - Remove punctuation except hyphen.
+      - Use short stable commercial name.
+
+  other_counterparty_name:
+    description: Optional second party when the document clearly reflects a flow from COUNTERPARTY to another named party.
+    normalization_rules:
+      - Convert to uppercase token for filename use.
+      - Remove punctuation except hyphen.
+
+  description_building_rule_for_fin_cnt:
+    rule: If counterparty_name exists, prepend it to DESCRIPTION. If other_counterparty_name also exists, use {COUNTERPARTY}-to-{OTHER_COUNTERPARTY}-{rest-description}. Remaining description words must be lowercase and hyphenated.
+
+archive_rules:
+  deprecated_or_temp_extensions: [.tmp, .bak, .old, .orig, .swp, .lock, .crdownload, .part, .dwl, .dwl2, .wbk]
+  ignore_system_files: [Thumbs.db, .DS_Store, desktop.ini]
+  duplicated_hash_action: review_then_move_to__DUPLICATED
+  superseded_status_action: keep_in_place_or_move_to__SUPERSEDED
+  cancelled_assets: move_asset_folder_to_company_archive_by_year
+
+path_length_limits:
+  hard_limit_full_path: 240
+  hard_limit_filename: 120
+  soft_limit_description: 60
+  soft_limit_project_name: 40
+  soft_limit_location: 30
+  shortening_order:
+    - shorten_description
+    - shorten_project_name
+    - shorten_location
+    - use_standard_abbreviations_table
+    - append_short_hash_suffix_if_needed
+    - last_resort_move_to_same_workstream_misc_review_or_longpath_bucket
+  normalization:
+    - collapse_multiple_spaces_and_dashes
+    - trim_trailing_dots_and_spaces
+    - remove_forbidden_windows_chars
+    - transliterate_if_required_by_execution_profile
+  uniqueness:
+    on_collision: add_-h{HASH6}_before_extension

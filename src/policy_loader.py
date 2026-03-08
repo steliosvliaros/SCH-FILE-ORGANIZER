@@ -8,13 +8,13 @@ from typing import Any
 import yaml
 
 
-REQUIRED_TOP_KEYS = [
+REQUIRED_TOP_KEYS_V25 = [
+    "version",
     "top_level_folders",
     "naming_policy",
     "controlled_vocabularies",
     "folder_structure",
-    "document_types",
-    "folder_buckets",
+    "routing_rules",
     "archive_rules",
     "required_fields",
     "path_length_limits",
@@ -34,23 +34,29 @@ class PolicyLoader:
     def from_file(cls, policy_path: str | Path) -> "PolicyLoader":
         path = Path(policy_path)
         with path.open("r", encoding="utf-8") as f:
-            policy = yaml.safe_load(f)
+            policy = yaml.safe_load(f) or {}
         loader = cls(policy_path=path, policy=policy)
         loader.validate()
         return loader
 
     def validate(self) -> None:
-        missing = [k for k in REQUIRED_TOP_KEYS if k not in self.policy]
+        missing = [k for k in REQUIRED_TOP_KEYS_V25 if k not in self.policy]
         if missing:
             raise ValueError(f"Missing required top-level policy keys: {missing}")
+
+        version = str(self.policy.get("version", "")).strip().lower()
+        if not version.startswith("v2_5"):
+            raise ValueError(f"Unsupported policy version '{self.policy.get('version')}'. Expected v2_5 format.")
 
         vocab = self.policy["controlled_vocabularies"]
         if not vocab.get("status_tags"):
             raise ValueError("controlled_vocabularies.status_tags is required")
         if not vocab.get("phase_codes"):
             raise ValueError("controlled_vocabularies.phase_codes is required")
-        if not self.policy["document_types"]:
-            raise ValueError("document_types must not be empty")
+
+        routes = self.policy["routing_rules"].get("document_type_routing", {})
+        if not routes:
+            raise ValueError("routing_rules.document_type_routing must not be empty")
 
         type_cfg = self.policy["naming_policy"]["typeid"]["encoding"]["types"]
         if not type_cfg:
@@ -66,15 +72,24 @@ class PolicyLoader:
 
     @property
     def doc_types(self) -> dict[str, dict[str, Any]]:
-        return dict(self.policy["document_types"])
+        # v2.5 stores document behavior under routing_rules.document_type_routing.
+        routing = self.policy.get("routing_rules", {}).get("document_type_routing", {})
+        doc_map: dict[str, dict[str, Any]] = {}
+        for doc_type, cfg in routing.items():
+            cfg_dict = dict(cfg or {})
+            if "default_folder" not in cfg_dict:
+                cfg_dict["default_folder"] = cfg_dict.get("fixed_folder") or cfg_dict.get("fallback_folder")
+            doc_map[doc_type] = cfg_dict
+        return doc_map
 
     @property
     def phase_folder_map(self) -> dict[str, str]:
-        return dict(self.policy["folder_buckets"]["PHASE_FOLDER_MAP"])
+        # v2.5 is workstream-first; phase folder map is not primary.
+        return {}
 
     @property
     def lifecycle_folders(self) -> list[str]:
-        return list(self.policy["folder_structure"]["asset_standard_subfolders"]["lifecycle_folders"])
+        return list(self.policy["folder_structure"]["asset_standard_subfolders"].get("workstream_folders", []))
 
     @property
     def company_root_subfolders(self) -> list[str]:
@@ -88,10 +103,19 @@ class PolicyLoader:
 
     @property
     def path_limits(self) -> dict[str, Any]:
-        pll = self.policy["path_length_limits"]
-        if "recommended_limits" in pll:
-            return dict(pll["recommended_limits"])
-        return dict(self.policy["naming_policy"].get("constraints", {}))
+        constraints = dict(self.policy.get("naming_policy", {}).get("constraints", {}))
+        pll = dict(self.policy.get("path_length_limits", {}))
+        # Expose stable keys used by the codebase while sourcing from v2.5 fields.
+        limits = {
+            "max_full_path_chars": pll.get("hard_limit_full_path", constraints.get("max_full_path_chars", 240)),
+            "max_filename_chars": pll.get("hard_limit_filename", constraints.get("max_filename_chars", 120)),
+            "max_foldername_chars": constraints.get("max_foldername_chars", 64),
+            "max_description_chars": pll.get("soft_limit_description", constraints.get("max_description_chars", 60)),
+            "max_project_name_chars": pll.get("soft_limit_project_name", constraints.get("max_project_name_chars", 40)),
+            "max_location_chars": pll.get("soft_limit_location", constraints.get("max_location_chars", 30)),
+            "max_depth_segments": constraints.get("max_depth_segments", 12),
+        }
+        return limits
 
     @property
     def type_configs(self) -> dict[str, dict[str, Any]]:
@@ -208,7 +232,10 @@ class PolicyLoader:
     def default_folder_for(self, phase: str, doc_type: str) -> str:
         phase = phase.upper()
         doc_type = doc_type.upper()
-        folder = self.doc_types[doc_type]["default_folder"]
+        doc_cfg = self.doc_types[doc_type]
+        folder = doc_cfg.get("fixed_folder") or doc_cfg.get("fallback_folder") or doc_cfg.get("default_folder")
+        if not folder:
+            raise ValueError(f"No default routing folder configured for document type: {doc_type}")
         if "{PHASE_FOLDER}" in folder:
             folder = folder.replace("{PHASE_FOLDER}", self.phase_folder_map[phase])
         return folder
