@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
+import json
+import shutil
 
 import pandas as pd
 
@@ -32,6 +34,16 @@ class ManifestBundle:
     rollback_manifest: pd.DataFrame
 
 
+@dataclass(frozen=True)
+class ApplyConfig:
+    dry_run: bool = True
+    batch_limit: int | None = 20
+    allow_live_apply: bool = False
+    create_target_parent_dirs: bool = True
+    block_unresolved_placeholders: bool = True
+    move_mode: str = "shutil_move"
+
+
 PLAN_DEFAULTS: dict[str, Any] = {
     "planner_action": "manual_review",
     "planner_reason": "planner output missing",
@@ -46,12 +58,24 @@ PLAN_DEFAULTS: dict[str, Any] = {
     "planner_root_mode": "ASSETS",
 }
 
+APPLY_DEFAULTS: dict[str, Any] = {
+    "execution_operation_id": pd.NA,
+    "execution_action": "move",
+    "execution_status": "pending",
+    "execution_blocked": False,
+    "execution_block_reason": pd.NA,
+    "execution_target_parent": pd.NA,
+    "execution_source_relative_path": pd.NA,
+    "execution_target_relative_path": pd.NA,
+    "execution_source_full_path": pd.NA,
+    "execution_target_full_path": pd.NA,
+}
+
 
 def _safe_series(df: pd.DataFrame, name: str, default: Any = None) -> pd.Series:
     if name in df.columns:
         return df[name]
     return pd.Series([default] * len(df), index=df.index)
-
 
 
 def normalize_plan_schema(df: pd.DataFrame) -> pd.DataFrame:
@@ -67,6 +91,16 @@ def normalize_plan_schema(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def normalize_executable_manifest(df: pd.DataFrame) -> pd.DataFrame:
+    out = ensure_inventory_schema(df)
+    for col, default in APPLY_DEFAULTS.items():
+        if col not in out.columns:
+            out[col] = default
+    if out.empty:
+        return out
+    out["execution_blocked"] = pd.Series(out["execution_blocked"], index=out.index).fillna(False).astype(bool)
+    return out
+
 
 def _derive_target_parent(path_like: str | None) -> str:
     if not path_like:
@@ -76,14 +110,12 @@ def _derive_target_parent(path_like: str | None) -> str:
     return "" if parent in {".", ""} else parent
 
 
-
 def _make_operation_id(row: pd.Series) -> str:
     rel = str(row.get("relative_path") or "")
     target = str(row.get("planner_target_relative_path") or "")
     action = str(row.get("planner_action") or "")
     hashed = abs(hash((rel, target, action))) % 10_000_000_000
     return f"op_{hashed:010d}"
-
 
 
 def _build_executable_manifest(frame: pd.DataFrame, config: ManifestConfig) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -95,18 +127,7 @@ def _build_executable_manifest(frame: pd.DataFrame, config: ManifestConfig) -> t
     candidates = frame[action_mask & ready_mask & target_mask & changed_mask].copy()
     if candidates.empty:
         empty = frame.iloc[0:0].copy()
-        for col in [
-            "execution_operation_id",
-            "execution_action",
-            "execution_status",
-            "execution_blocked",
-            "execution_block_reason",
-            "execution_target_parent",
-            "execution_source_relative_path",
-            "execution_target_relative_path",
-            "execution_source_full_path",
-            "execution_target_full_path",
-        ]:
+        for col in APPLY_DEFAULTS:
             if col not in empty.columns:
                 empty[col] = pd.Series(dtype=object)
         return empty, empty.copy()
@@ -136,7 +157,6 @@ def _build_executable_manifest(frame: pd.DataFrame, config: ManifestConfig) -> t
     return candidates.reset_index(drop=True), blocked_manifest.reset_index(drop=True)
 
 
-
 def _build_keep_register(frame: pd.DataFrame, config: ManifestConfig) -> pd.DataFrame:
     if not config.include_keep_register:
         return frame.iloc[0:0].copy()
@@ -152,7 +172,6 @@ def _build_keep_register(frame: pd.DataFrame, config: ManifestConfig) -> pd.Data
     return keep.reset_index(drop=True)
 
 
-
 def _build_review_queue(frame: pd.DataFrame, executable_manifest: pd.DataFrame, keep_register: pd.DataFrame, blocked_manifest: pd.DataFrame) -> pd.DataFrame:
     excluded = set(executable_manifest.get("relative_path", pd.Series(dtype=object)).astype(str))
     excluded |= set(keep_register.get("relative_path", pd.Series(dtype=object)).astype(str))
@@ -163,7 +182,6 @@ def _build_review_queue(frame: pd.DataFrame, executable_manifest: pd.DataFrame, 
         review.loc[review["relative_path"].astype(str).isin(blocked_paths), "planner_reason"] = blocked_manifest.set_index(blocked_manifest["relative_path"].astype(str))["execution_block_reason"].reindex(review["relative_path"].astype(str)).values
     review["review_bucket"] = review["planner_action"].fillna("manual_review")
     return review.reset_index(drop=True)
-
 
 
 def _build_rollback_manifest(executable_manifest: pd.DataFrame) -> pd.DataFrame:
@@ -180,7 +198,6 @@ def _build_rollback_manifest(executable_manifest: pd.DataFrame) -> pd.DataFrame:
     return rollback.reset_index(drop=True)
 
 
-
 def build_execution_bundle(plan_df: pd.DataFrame, config: ManifestConfig | None = None) -> ManifestBundle:
     config = config or ManifestConfig()
     frame = normalize_plan_schema(plan_df)
@@ -195,7 +212,6 @@ def build_execution_bundle(plan_df: pd.DataFrame, config: ManifestConfig | None 
         blocked_manifest=blocked_manifest,
         rollback_manifest=rollback_manifest,
     )
-
 
 
 def save_manifest_bundle(bundle: ManifestBundle, output_dir: str | Path, stem: str) -> dict[str, tuple[Path, Path]]:
@@ -218,7 +234,6 @@ def save_manifest_bundle(bundle: ManifestBundle, output_dir: str | Path, stem: s
     }
 
 
-
 def manifest_summary(bundle: ManifestBundle) -> dict[str, int]:
     return {
         "executable_rows": int(len(bundle.executable_manifest)),
@@ -227,3 +242,95 @@ def manifest_summary(bundle: ManifestBundle) -> dict[str, int]:
         "blocked_rows": int(len(bundle.blocked_manifest)),
         "rollback_rows": int(len(bundle.rollback_manifest)),
     }
+
+
+def _has_placeholder(value: Any) -> bool:
+    if value is None or pd.isna(value):
+        return False
+    s = str(value)
+    return "{" in s and "}" in s
+
+
+def apply_manifest(executable_manifest: pd.DataFrame, config: ApplyConfig | None = None) -> pd.DataFrame:
+    config = config or ApplyConfig()
+    frame = normalize_executable_manifest(executable_manifest).copy()
+    if frame.empty:
+        for col in ["apply_status", "apply_message", "apply_dry_run", "apply_timestamp"]:
+            if col not in frame.columns:
+                frame[col] = pd.Series(dtype=object)
+        return frame
+
+    if config.batch_limit is not None:
+        frame = frame.head(config.batch_limit).copy()
+
+    results: list[dict[str, Any]] = []
+    for _, row in frame.iterrows():
+        source = row.get("execution_source_full_path")
+        target = row.get("execution_target_full_path")
+        blocked_reason = row.get("execution_block_reason")
+        status = "pending"
+        message = ""
+
+        if bool(row.get("execution_blocked", False)):
+            status = "blocked"
+            message = str(blocked_reason or "execution blocked")
+        elif _has_placeholder(target) and config.block_unresolved_placeholders:
+            status = "blocked"
+            message = "target path contains unresolved placeholder"
+        elif not source or pd.isna(source):
+            status = "error"
+            message = "missing execution_source_full_path"
+        elif not target or pd.isna(target):
+            status = "error"
+            message = "missing execution_target_full_path"
+        elif config.dry_run or not config.allow_live_apply:
+            status = "dry_run_ready"
+            message = "validated for dry run; no filesystem changes applied"
+        else:
+            src = Path(str(source))
+            dst = Path(str(target))
+            try:
+                if config.create_target_parent_dirs:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(src), str(dst))
+                status = "moved"
+                message = "move completed"
+            except Exception as exc:
+                status = "error"
+                message = f"move failed: {exc}"
+
+        out = row.to_dict()
+        out["apply_status"] = status
+        out["apply_message"] = message
+        out["apply_dry_run"] = bool(config.dry_run or not config.allow_live_apply)
+        out["apply_timestamp"] = pd.Timestamp.utcnow().isoformat()
+        results.append(out)
+
+    return pd.DataFrame(results)
+
+
+def apply_summary(apply_log: pd.DataFrame) -> dict[str, int]:
+    if apply_log.empty or "apply_status" not in apply_log.columns:
+        return {"rows": int(len(apply_log)), "moved": 0, "dry_run_ready": 0, "blocked": 0, "error": 0}
+    counts = apply_log["apply_status"].fillna("unknown").value_counts().to_dict()
+    return {
+        "rows": int(len(apply_log)),
+        "moved": int(counts.get("moved", 0)),
+        "dry_run_ready": int(counts.get("dry_run_ready", 0)),
+        "blocked": int(counts.get("blocked", 0)),
+        "error": int(counts.get("error", 0)),
+    }
+
+
+def save_apply_log(apply_log: pd.DataFrame, output_dir: str | Path, stem: str) -> dict[str, Path]:
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = out_dir / f"apply_log_{stem}.csv"
+    parquet_path = out_dir / f"apply_log_{stem}.parquet"
+    jsonl_path = out_dir / f"apply_log_{stem}.jsonl"
+    apply_log.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    apply_log.to_parquet(parquet_path, index=False)
+    with jsonl_path.open("w", encoding="utf-8") as f:
+        for record in apply_log.to_dict(orient="records"):
+            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    return {"csv": csv_path, "parquet": parquet_path, "jsonl": jsonl_path}

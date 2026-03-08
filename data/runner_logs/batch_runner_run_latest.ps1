@@ -26,3 +26,6 @@ Write-Host 'Stage 7: 07_execution_manifest -> 07_execution_manifest.ipynb'
 Write-Host 'Already done - review if you want to rerun.'
 Write-Host 'Manifest checkpoint before any apply action.'
 Read-Host 'Checkpoint reached. Press Enter to continue or Ctrl+C to stop'
+
+Write-Host 'Stage 8: 11_canonical_rename_engine -> 11_canonical_rename_engine.ipynb'
+Write-Host 'Already done - review if you want to rerun.'
