@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
@@ -104,6 +105,8 @@ def normalize_archive_policy(policy: Union[Dict[str, Any], str, Path]) -> Dict[s
         "superseded_action": "review",
         "cancelled_assets_action": None,
         "preserve_relative_path": False,
+        "duplicate_special_folder": "_DUPLICATED",
+        "superseded_special_folder": "_SUPERSEDED",
     }
 
     if isinstance(rules, list):
@@ -132,6 +135,10 @@ def normalize_archive_policy(policy: Union[Dict[str, Any], str, Path]) -> Dict[s
 
     special = raw.get("special_storage_policy", {})
     if isinstance(special, dict):
+        folders = special.get("special_folders", {})
+        if isinstance(folders, dict):
+            normalized["duplicate_special_folder"] = str(folders.get("duplicated", normalized["duplicate_special_folder"]))
+            normalized["superseded_special_folder"] = str(folders.get("superseded", normalized["superseded_special_folder"]))
         placement = special.get("placement")
         if isinstance(placement, str) and "preserve_relative" in placement:
             normalized["preserve_relative_path"] = True
@@ -365,6 +372,7 @@ def classify_inventory(inv: pd.DataFrame, policy: Union[Dict[str, Any], str, Pat
     out["rule_reason"] = "unclassified"
     out["rule_confidence"] = "low"
     out["proposed_relative_target"] = ""
+    out["special_folder_target"] = ""
 
     # Extra metadata columns (safe additions).
     out["policy_version_mode"] = policy_cfg["version_mode"]
@@ -385,6 +393,9 @@ def classify_inventory(inv: pd.DataFrame, policy: Union[Dict[str, Any], str, Pat
     out["current_folder_subpath"] = out["relative_path"].astype(str).map(_current_route_subpath)
     out["path_length_warning"] = out["path_length"] > policy_cfg["full_path_limit"]
     out["filename_length_warning"] = out["filename_length"] > policy_cfg["filename_limit"]
+    # Backward-compatible legacy review columns expected by older notebooks.
+    out["path_risk"] = out["path_length_warning"].map(lambda v: "high" if bool(v) else "")
+    out["filename_risk"] = out["filename_length_warning"].map(lambda v: "high" if bool(v) else "")
 
     junk_exts = set(archive_cfg.get("junk_extensions", []))
     junk_names = set(archive_cfg.get("junk_filenames", []))
@@ -408,6 +419,7 @@ def classify_inventory(inv: pd.DataFrame, policy: Union[Dict[str, Any], str, Pat
             if "move" in str(dup_action).lower() or "duplicated" in str(dup_action).lower():
                 out.at[idx, "rule_status"] = "move_to_special_folder"
                 out.at[idx, "rule_reason"] = "duplicate_exact_hash"
+                out.at[idx, "special_folder_target"] = archive_cfg.get("duplicate_special_folder", "_DUPLICATED")
             else:
                 out.at[idx, "rule_status"] = "review"
                 out.at[idx, "rule_reason"] = "duplicate_exact_hash_review"
@@ -429,6 +441,7 @@ def classify_inventory(inv: pd.DataFrame, policy: Union[Dict[str, Any], str, Pat
                 superseded_action = archive_cfg.get("superseded_action", "review")
                 if "move" in str(superseded_action).lower() or "superceded" in str(superseded_action).lower() or "_SUPERSEDED" in str(superseded_action):
                     out.at[idx, "rule_status"] = "move_to_special_folder"
+                    out.at[idx, "special_folder_target"] = archive_cfg.get("superseded_special_folder", "_SUPERSEDED")
                 else:
                     out.at[idx, "rule_status"] = "review"
                 out.at[idx, "rule_reason"] = "superseded_status"
@@ -474,7 +487,43 @@ def classify_inventory(inv: pd.DataFrame, policy: Union[Dict[str, Any], str, Pat
             out.at[idx, "rule_reason"] = "filename_not_in_canonical_pattern"
             out.at[idx, "rule_confidence"] = "low"
 
+    mask_move = out["rule_status"].astype(str).eq("move_to_special_folder") & out["special_folder_target"].astype(str).eq("")
+    if mask_move.any():
+        dup_mask = mask_move & out["rule_reason"].astype(str).str.contains("duplicate", case=False, na=False)
+        sup_mask = mask_move & out["rule_reason"].astype(str).str.contains("superseded", case=False, na=False)
+        out.loc[dup_mask, "special_folder_target"] = archive_cfg.get("duplicate_special_folder", "_DUPLICATED")
+        out.loc[sup_mask, "special_folder_target"] = archive_cfg.get("superseded_special_folder", "_SUPERSEDED")
+
+    priority_map = {
+        'archive_or_delete_candidate': 10,
+        'move_to_special_folder': 20,
+        'review': 30,
+        'compliant_keep_review_path': 40,
+    }
+    
+    out['action_priority'] = out['rule_status'].map(priority_map).fillna(99).astype(int)
+
     return out
+
+
+def save_rule_outputs(classified: pd.DataFrame, output_dir: Union[str, Path], stem: Optional[str] = None) -> Tuple[Path, Path]:
+    """Save rule classification outputs as CSV and Parquet.
+
+    Keeps the legacy notebook contract stable.
+    """
+    outdir = Path(output_dir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    if stem is None:
+        stem = f"rule_classification_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    csv_path = outdir / f"{stem}.csv"
+    parquet_path = outdir / f"{stem}.parquet"
+    classified.to_csv(csv_path, index=False, encoding='utf-8-sig')
+    try:
+        classified.to_parquet(parquet_path, index=False)
+    except Exception:
+        # keep CSV as the minimum guaranteed export if parquet engine is unavailable
+        parquet_path = outdir / f"{stem}.parquet"
+    return csv_path, parquet_path
 
 
 __all__ = [
@@ -482,4 +531,5 @@ __all__ = [
     "normalize_archive_policy",
     "normalize_policy_structure",
     "classify_inventory",
+    "save_rule_outputs",
 ]
