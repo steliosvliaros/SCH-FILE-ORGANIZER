@@ -400,3 +400,130 @@ def save_apply_log(apply_log: pd.DataFrame, output_dir: str | Path, stem: str) -
         for record in apply_log.to_dict(orient="records"):
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
     return {"csv": csv_path, "parquet": parquet_path, "jsonl": jsonl_path}
+
+
+def _first_existing_column(df: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
+    for name in candidates:
+        if name in df.columns:
+            return name
+    return None
+
+
+def _series_to_absolute_path(series: pd.Series, base_path: str | None) -> pd.Series:
+    def _to_absolute(value: Any) -> str | None:
+        if value is None or pd.isna(value):
+            return None
+        raw = str(value).strip()
+        if not raw:
+            return None
+        candidate = Path(raw)
+        if candidate.is_absolute() or base_path is None:
+            return str(candidate)
+        return str(Path(base_path) / candidate)
+
+    return series.map(_to_absolute)
+
+
+def build_copy_manifest_with_clean_root(
+    csv_path: str | Path,
+    source_root: str | Path = r"C:\SONADO-IK-801455240",
+    source_segment: str = "HTL0049-01_OITYLO-KOKKALA_MANI",
+    target_segment: str = "HTL0049-01_OITYLO-KOKKALA_MANI_CLEAN",
+) -> pd.DataFrame:
+    frame = pd.read_csv(csv_path)
+
+    current_col = _first_existing_column(
+        frame,
+        (
+            "absolute_current_path",
+            "execution_source_full_path",
+            "absolute_path",
+            "execution_source_relative_path",
+            "relative_path",
+        ),
+    )
+    proposed_col = _first_existing_column(
+        frame,
+        (
+            "absolute_proposed_path",
+            "execution_target_full_path",
+            "planner_target_full_path",
+            "execution_target_relative_path",
+            "planner_target_relative_path",
+        ),
+    )
+
+    if current_col is None:
+        raise ValueError("Could not derive current path column from CSV")
+    if proposed_col is None:
+        raise ValueError("Could not derive proposed path column from CSV")
+
+    out = frame.copy()
+    source_root_text = str(source_root)
+    out["absolute_current_path"] = _series_to_absolute_path(out[current_col], source_root_text)
+    out["absolute_proposed_path"] = _series_to_absolute_path(out[proposed_col], source_root_text)
+    out["absolute_proposed_path"] = out["absolute_proposed_path"].map(
+        lambda p: None if p is None else str(p).replace(source_segment, target_segment)
+    )
+    return out
+
+
+def copy_and_rename_from_paths(copy_manifest: pd.DataFrame, overwrite_existing: bool = False) -> pd.DataFrame:
+    if copy_manifest.empty:
+        return pd.DataFrame(columns=["absolute_current_path", "absolute_proposed_path", "copy_status", "copy_message"])
+
+    results: list[dict[str, Any]] = []
+    for _, row in copy_manifest.iterrows():
+        current = row.get("absolute_current_path")
+        proposed = row.get("absolute_proposed_path")
+        status = "pending"
+        message = ""
+
+        if not current or pd.isna(current):
+            status = "error"
+            message = "missing absolute_current_path"
+        elif not proposed or pd.isna(proposed):
+            status = "error"
+            message = "missing absolute_proposed_path"
+        else:
+            src = Path(str(current))
+            dst = Path(str(proposed))
+            try:
+                if not src.exists() or not src.is_file():
+                    status = "missing_source"
+                    message = "source file does not exist"
+                elif dst.exists() and not overwrite_existing:
+                    status = "blocked"
+                    message = "target already exists and overwrite_existing is False"
+                else:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dst)
+                    status = "copied"
+                    message = "copy and rename completed"
+            except Exception as exc:
+                status = "error"
+                message = f"copy failed: {exc}"
+
+        out = row.to_dict()
+        out["copy_status"] = status
+        out["copy_message"] = message
+        out["copy_timestamp"] = pd.Timestamp.utcnow().isoformat()
+        results.append(out)
+
+    return pd.DataFrame(results)
+
+
+def process_rule_classification_copy(
+    csv_path: str | Path,
+    source_root: str | Path = r"C:\SONADO-IK-801455240",
+    source_segment: str = "HTL0049-01_OITYLO-KOKKALA_MANI",
+    target_segment: str = "HTL0049-01_OITYLO-KOKKALA_MANI_CLEAN",
+    overwrite_existing: bool = False,
+) -> pd.DataFrame:
+    manifest = build_copy_manifest_with_clean_root(
+        csv_path=csv_path,
+        source_root=source_root,
+        source_segment=source_segment,
+        target_segment=target_segment,
+    )
+    return copy_and_rename_from_paths(manifest, overwrite_existing=overwrite_existing)
