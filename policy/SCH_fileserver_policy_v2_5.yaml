@@ -166,7 +166,7 @@ controlled_vocabularies:
   # WORKSTREAM = physical foldering axis used for filing.
   workstream_codes:
     AM: Asset Master
-    PC: Project Controls
+    PCD: Project Controls and Development
     LS: Land & Site
     PMT: Permitting & Approvals
     TDE: Technical Design
@@ -228,7 +228,7 @@ folder_structure:
     # Main workstream folders inside each asset.
     workstream_folders:
       - 00_ASSET_MASTER          # Keep small: core asset identity, key register, and fixed reference data only.
-      - 01_PROJECT_CONTROLS      # Keep small: programme, progress, cost/risk/change, and meeting/action control.
+      - 01_DEVELOPMENT            # Keep small: programme, progress, cost/risk/change, and meeting/action control.
       - 02_LAND_SITE             # Land, titles, surveys, geotech, site data, and land-related agreements/payments.
       - 03_PERMITTING_APPROVALS  # Applications, permits, approvals, authority responses, and permit-related support.
       - 04_TECHNICAL_DESIGN      # Studies, drawings, models, calculations, and design consultant records.
@@ -247,7 +247,7 @@ folder_structure:
         - 03_STATUS_MILESTONES       # Status notes, milestone snapshots, and high-level asset state records.
         - 99_MISC_REVIEW             # Short-term review area for unclear files.
 
-      01_PROJECT_CONTROLS:
+      01_DEVELOPMENT:
         - 01_PROGRAMME_WBS           # Programme, baseline schedule, WBS, and planning logic.
         - 02_PROGRESS_REPORTING      # Periodic progress reports, dashboards, and management updates.
         - 03_COST_RISK_CHANGE        # Cost tracking, risk registers, change control, and variations master view.
@@ -366,7 +366,7 @@ routing_rules:
   # Workstream selection decides the main folder family.
   workstream_folder_map:
     AM: 00_ASSET_MASTER
-    PC: 01_PROJECT_CONTROLS
+    PCD: 01_DEVELOPMENT
     LS: 02_LAND_SITE
     PMT: 03_PERMITTING_APPROVALS
     TDE: 04_TECHNICAL_DESIGN
@@ -436,9 +436,9 @@ routing_rules:
 
     COR:
       strategy: by_workstream
-      fallback_folder: 01_PROJECT_CONTROLS/04_MEETINGS_ACTIONS
+      fallback_folder: 01_DEVELOPMENT/04_MEETINGS_ACTIONS
       workstream_routes:
-        PC: 01_PROJECT_CONTROLS/04_MEETINGS_ACTIONS
+        PCD: 01_DEVELOPMENT/04_MEETINGS_ACTIONS
         PMT: 03_PERMITTING_APPROVALS/02_SUBMISSIONS_RESPONSES
         TDE: 04_TECHNICAL_DESIGN/99_MISC_REVIEW
         PRC: 05_COMMERCIAL_PROCUREMENT/99_MISC_REVIEW
@@ -447,9 +447,9 @@ routing_rules:
 
     REP:
       strategy: by_workstream
-      fallback_folder: 01_PROJECT_CONTROLS/02_PROGRESS_REPORTING
+      fallback_folder: 01_DEVELOPMENT/02_PROGRESS_REPORTING
       workstream_routes:
-        PC: 01_PROJECT_CONTROLS/02_PROGRESS_REPORTING
+        PCD: 01_DEVELOPMENT/02_PROGRESS_REPORTING
         TDE: 04_TECHNICAL_DESIGN/99_MISC_REVIEW
         FNI: 06_FINANCE_INSURANCE/06_COST_REPORTING
         CND: 07_CONSTRUCTION_DELIVERY/02_SITE_DIARY_PROGRESS
@@ -457,7 +457,7 @@ routing_rules:
 
     MIN:
       strategy: by_workstream
-      fallback_folder: 01_PROJECT_CONTROLS/04_MEETINGS_ACTIONS
+      fallback_folder: 01_DEVELOPMENT/04_MEETINGS_ACTIONS
 
     DAT:
       strategy: by_workstream
