@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 import json
+import os
 import shutil
+import sys
 
 import pandas as pd
 
@@ -468,6 +470,14 @@ def build_copy_manifest_with_clean_root(
     return out
 
 
+def _win_abspath(p: Path) -> str:
+    """Absolute path string with \\\\?\\  prefix on Windows for paths > 259 chars."""
+    s = os.path.abspath(str(p))
+    if sys.platform == "win32" and len(s) > 259 and not s.startswith("\\\\?\\"):
+        return "\\\\?\\" + s
+    return s
+
+
 def copy_and_rename_from_paths(copy_manifest: pd.DataFrame, overwrite_existing: bool = False) -> pd.DataFrame:
     if copy_manifest.empty:
         return pd.DataFrame(columns=["absolute_current_path", "absolute_proposed_path", "copy_status", "copy_message"])
@@ -486,18 +496,23 @@ def copy_and_rename_from_paths(copy_manifest: pd.DataFrame, overwrite_existing: 
             status = "error"
             message = "missing absolute_proposed_path"
         else:
-            src = Path(str(current))
-            dst = Path(str(proposed))
+            src = Path(str(current).strip())
+            dst = Path(str(proposed).strip())
+            src_str = _win_abspath(src)
+            dst_str = _win_abspath(dst)
             try:
-                if not src.exists() or not src.is_file():
+                if not os.path.exists(src_str):
                     status = "missing_source"
-                    message = "source file does not exist"
-                elif dst.exists() and not overwrite_existing:
+                    message = "source path does not exist"
+                elif not os.path.isfile(src_str):
+                    status = "unsupported_source"
+                    message = "source exists but is not a file"
+                elif os.path.exists(dst_str) and not overwrite_existing:
                     status = "blocked"
                     message = "target already exists and overwrite_existing is False"
                 else:
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(src, dst)
+                    os.makedirs(os.path.dirname(dst_str), exist_ok=True)
+                    shutil.copy2(src_str, dst_str)
                     status = "copied"
                     message = "copy and rename completed"
             except Exception as exc:

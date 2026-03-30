@@ -62,7 +62,8 @@ def iter_files(scan_root: Path, follow_symlinks: bool = False) -> Iterable[Path]
                         if is_link and not follow_symlinks:
                             continue
                         if entry.is_dir(follow_symlinks=follow_symlinks):
-                            stack.append(child)
+                            if not entry.name.startswith("_"):
+                                stack.append(child)
                             continue
                         if entry.is_file(follow_symlinks=follow_symlinks):
                             yield child

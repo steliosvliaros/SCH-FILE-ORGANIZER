@@ -20,6 +20,16 @@ REQUIRED_TOP_KEYS_V25 = [
     "path_length_limits",
 ]
 
+REQUIRED_TOP_KEYS_MASTER = [
+    "schema",
+    "enums",
+    "type_catalog",
+    "route_registry",
+    "constraints",
+    "topology",
+    "workstreams",
+]
+
 DISALLOWED_CHARS_PATTERN = re.compile(r'[<>:"/\\|?*]')
 NON_ALNUM_DASH_UNDERSCORE = re.compile(r"[^A-Za-z0-9_-]+")
 MULTI_DASH = re.compile(r"-+")
@@ -39,7 +49,18 @@ class PolicyLoader:
         loader.validate()
         return loader
 
+    @property
+    def _is_master(self) -> bool:
+        """True when the loaded file is the master policy format (schema_version 3.x)."""
+        return "schema" in self.policy
+
     def validate(self) -> None:
+        if self._is_master:
+            self._validate_master()
+        else:
+            self._validate_v25()
+
+    def _validate_v25(self) -> None:
         missing = [k for k in REQUIRED_TOP_KEYS_V25 if k not in self.policy]
         if missing:
             raise ValueError(f"Missing required top-level policy keys: {missing}")
@@ -62,17 +83,55 @@ class PolicyLoader:
         if not type_cfg:
             raise ValueError("naming_policy.typeid.encoding.types must not be empty")
 
+    def _validate_master(self) -> None:
+        missing = [k for k in REQUIRED_TOP_KEYS_MASTER if k not in self.policy]
+        if missing:
+            raise ValueError(f"Missing required top-level master policy keys: {missing}")
+
+        schema_version = str(self.policy["schema"].get("schema_version", "")).strip()
+        if not schema_version.startswith("3."):
+            raise ValueError(
+                f"Unsupported master policy schema_version '{schema_version}'. Expected 3.x format."
+            )
+
+        enums = self.policy["enums"]
+        if not enums.get("statuses"):
+            raise ValueError("enums.statuses is required")
+        if not enums.get("phases"):
+            raise ValueError("enums.phases is required")
+        if not self.policy.get("route_registry"):
+            raise ValueError("route_registry must not be empty")
+        if not self.policy.get("type_catalog"):
+            raise ValueError("type_catalog must not be empty")
+
     @property
     def status_tags(self) -> list[str]:
+        if self._is_master:
+            return list(self.policy["enums"]["statuses"])
         return list(self.policy["controlled_vocabularies"]["status_tags"])
 
     @property
     def phase_codes(self) -> dict[str, str]:
+        if self._is_master:
+            return dict(self.policy["enums"]["phases"])
         return dict(self.policy["controlled_vocabularies"]["phase_codes"])
 
     @property
     def doc_types(self) -> dict[str, dict[str, Any]]:
-        # v2.5 stores document behavior under routing_rules.document_type_routing.
+        if self._is_master:
+            registry = self.policy.get("route_registry", {})
+            doc_map: dict[str, dict[str, Any]] = {}
+            for doc_type, cfg in registry.items():
+                cfg_dict = dict(cfg or {})
+                # Provide stable 'default_folder' key for callers
+                if "default_folder" not in cfg_dict:
+                    cfg_dict["default_folder"] = (
+                        cfg_dict.get("target_folder_id")
+                        or cfg_dict.get("fallback_folder_id")
+                    )
+                doc_map[doc_type] = cfg_dict
+            return doc_map
+        # v2.5: document behavior under routing_rules.document_type_routing
         routing = self.policy.get("routing_rules", {}).get("document_type_routing", {})
         doc_map: dict[str, dict[str, Any]] = {}
         for doc_type, cfg in routing.items():
@@ -84,29 +143,49 @@ class PolicyLoader:
 
     @property
     def phase_folder_map(self) -> dict[str, str]:
-        # v2.5 is workstream-first; phase folder map is not primary.
+        # Both v2.5 and master use workstream-first filing; phase is not a folder axis.
         return {}
 
     @property
     def lifecycle_folders(self) -> list[str]:
+        if self._is_master:
+            return [
+                ws["root_folder"]["name"]
+                for ws in self.policy["workstreams"].values()
+                if ws.get("root_folder")
+            ]
         return list(self.policy["folder_structure"]["asset_standard_subfolders"].get("workstream_folders", []))
 
     @property
     def company_root_subfolders(self) -> list[str]:
+        if self._is_master:
+            return list(self.policy["topology"]["company_root"]["subfolders"].keys())
         if "company_root_subfolders" in self.policy:
             return list(self.policy["company_root_subfolders"])
         return list(self.policy["folder_structure"]["roots"]["COMPANY_ROOT"].get("subfolders", []))
 
     @property
     def special_folders(self) -> list[str]:
+        if self._is_master:
+            return list(self.policy["special_asset_folders"].keys())
         return list(self.policy["folder_structure"]["asset_standard_subfolders"].get("special_top_level_folders", []))
 
     @property
     def path_limits(self) -> dict[str, Any]:
+        if self._is_master:
+            c = self.policy.get("constraints", {})
+            return {
+                "max_full_path_chars": c.get("max_full_path_chars", 240),
+                "max_filename_chars": c.get("max_filename_chars", 120),
+                "max_foldername_chars": c.get("max_foldername_chars", 64),
+                "max_description_chars": c.get("max_description_chars", 60),
+                "max_project_name_chars": c.get("max_project_name_chars", 40),
+                "max_location_chars": c.get("max_location_chars", 30),
+                "max_depth_segments": c.get("max_depth_segments", 12),
+            }
         constraints = dict(self.policy.get("naming_policy", {}).get("constraints", {}))
         pll = dict(self.policy.get("path_length_limits", {}))
-        # Expose stable keys used by the codebase while sourcing from v2.5 fields.
-        limits = {
+        return {
             "max_full_path_chars": pll.get("hard_limit_full_path", constraints.get("max_full_path_chars", 240)),
             "max_filename_chars": pll.get("hard_limit_filename", constraints.get("max_filename_chars", 120)),
             "max_foldername_chars": constraints.get("max_foldername_chars", 64),
@@ -115,11 +194,19 @@ class PolicyLoader:
             "max_location_chars": pll.get("soft_limit_location", constraints.get("max_location_chars", 30)),
             "max_depth_segments": constraints.get("max_depth_segments", 12),
         }
-        return limits
 
     @property
     def type_configs(self) -> dict[str, dict[str, Any]]:
+        if self._is_master:
+            return dict(self.policy["type_catalog"])
         return dict(self.policy["naming_policy"]["typeid"]["encoding"]["types"])
+
+    @property
+    def workstreams(self) -> dict[str, dict[str, Any]]:
+        """Return the workstream map (master format only; empty dict for v2.5)."""
+        if self._is_master:
+            return dict(self.policy["workstreams"])
+        return {}
 
     def normalize_token(self, value: str, max_len: int | None = None) -> str:
         value = str(value).strip().replace(" ", "-")
